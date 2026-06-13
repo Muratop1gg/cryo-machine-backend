@@ -58,7 +58,6 @@ class ConnectionManager:
 
     async def broadcast_sensor_data(self, sensor_data: SensorData):
         if not self.active_connections:
-            print("⚠️ No active connections for sensor data")
             return
 
         message = json.dumps({
@@ -80,7 +79,6 @@ class ConnectionManager:
 
     async def broadcast_event(self, event: Event):
         if not self.active_connections:
-            print("⚠️ No active connections for event")
             return
 
         message = json.dumps({
@@ -140,14 +138,14 @@ async def broadcast_sensor_data_loop():
     """Фоновая задача: рассылка данных сенсоров всем клиентам"""
     async for sensor_data in sensor_data_generator():
         await manager.broadcast_sensor_data(sensor_data)
-        print(f"🔄 Sensor data generated: temp={sensor_data.temperature}")
+        
 
 
 async def broadcast_events_loop():
     """Фоновая задача: рассылка событий всем клиентам"""
     async for event in sensor_event_generator():
         await manager.broadcast_event(event)
-        print(f"🔄 Event generated: {event.type} (seq: {event.sequence})")
+        
 
 
 # --- Lifespan ---
