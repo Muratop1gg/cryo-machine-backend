@@ -3,48 +3,18 @@ import asyncio
 import json
 from datetime import datetime
 import random
-from typing import List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from dataclasses import dataclass, asdict
+from pydantic import ValidationError
+from starlette import status
 
-
-# --- Модели данных ---
-class SensorData(BaseModel):
-    temperature: str
-    systemStatus: str
-    sessionTime: str
-    s1: str
-    s2: str
-
-
-@dataclass
-class Event:
-    type: str
-    timestamp: str
-    id: str
-    manual: bool
-    sequence: int
-
-    def model_dump(self) -> dict:
-        return asdict(self)
-
-
-EVENT_TYPES = [
-    'patient_lift_up',
-    'patient_lift_down',
-    'patient_lift_stop',
-    'tube_lift_up',
-    'tube_lift_down',
-    'tube_lift_stop'
-]
+import models
 
 
 # --- Глобальный менеджер соединений ---
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: models.List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -56,7 +26,7 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
         print(f"❌ Client disconnected. Total connections: {len(self.active_connections)}")
 
-    async def broadcast_sensor_data(self, sensor_data: SensorData):
+    async def broadcast_sensor_data(self, sensor_data: models.SensorData):
         if not self.active_connections:
             return
 
@@ -70,14 +40,13 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-                print(f"📤 Sent sensor data to client")
             except WebSocketDisconnect:
                 disconnected.append(connection)
 
         for connection in disconnected:
             self.disconnect(connection)
 
-    async def broadcast_event(self, event: Event):
+    async def broadcast_event(self, event: models.Event):
         if not self.active_connections:
             return
 
@@ -91,7 +60,6 @@ class ConnectionManager:
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-                print(f"📤 Sent event to client: {event.type}")
             except WebSocketDisconnect:
                 disconnected.append(connection)
 
@@ -108,28 +76,30 @@ async def sensor_data_generator():
     while True:
         await asyncio.sleep(0.2)
         sequence += 1
-        sensor_data = SensorData(
-            temperature=str(random.choice(["-196.0", "-195.2", "-197.1"])),
-            systemStatus=random.choice(["Простой", "Сушка", "Процедура", "Авария"]),
-            sessionTime=str(120 + sequence * 0.2),
-            s1=str(random.randint(36, 39)),
-            s2=str(random.randint(36, 39))
+        ss = models.SystemStatusModel(
+            currentMode= "cooling",
+            errorCode = [],
+            SteamOnline = True,
+            HoistOnline= True,
+        )
+
+        t = models.TelemetryModel(
+            Temperature = models.TemperatureModel(SteamGenerator=0, HeaterZone=0, AirDuct=0, Humidity=0, ChamberZone=0),
+            Environment = models.EnvironmentModel(AirDuctHumidity=0,ChamberHumidity = 0,ChamberOxygen = 0,NitrogenLevel = 0),
+            vfdStatus = models.VFDStatusesModel(Steam= models.VFDModel(Frequency=0, ErrorCode=""), Hoist=models.VFDModel(Frequency=0, ErrorCode="")),
+        )
+
+        sensor_data = models.SensorData(
+            SystemStatus=ss,
+            Telemetry=t
         )
         yield sensor_data
 
 
 async def sensor_event_generator():
-    sequence = 0
     while True:
         await asyncio.sleep(2 + random.random() * 2)
-        sequence += 1
-        event = Event(
-            type=random.choice(EVENT_TYPES),
-            timestamp=datetime.now().isoformat(),
-            id=f"{random.choice('abcdefg')}{''.join(random.choices('0123456789ab', k=5))}",
-            manual=random.choice([True, False]),
-            sequence=sequence
-        )
+        event = models.Event(EventType=0)
         yield event
 
 
@@ -138,19 +108,17 @@ async def broadcast_sensor_data_loop():
     """Фоновая задача: рассылка данных сенсоров всем клиентам"""
     async for sensor_data in sensor_data_generator():
         await manager.broadcast_sensor_data(sensor_data)
-        
-
 
 async def broadcast_events_loop():
     """Фоновая задача: рассылка событий всем клиентам"""
     async for event in sensor_event_generator():
         await manager.broadcast_event(event)
-        
+
 
 
 # --- Lifespan ---
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(myapp: FastAPI):
     # Startup
     print("🚀 Starting server...")
     task1 = asyncio.create_task(broadcast_sensor_data_loop())
@@ -179,19 +147,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# --- REST endpoints ---
-@app.get("/api/sensors", response_model=SensorData)
-async def get_sensor_data():
-    return SensorData(
-        temperature="-196",
-        systemStatus="Процедура",
-        sessionTime="120",
-        s1="37",
-        s2="38"
-    )
-
-
 @app.get("/api/status")
 async def get_status():
     return {
@@ -200,10 +155,41 @@ async def get_status():
     }
 
 
+@app.post("/api/settings")
+async def update_settings(settings: models.UpdateSettings):
+    try:
+        # Валидация значений
+        # if settings.TechnologicalSettings.WorkingTime <= 0:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_400_BAD_REQUEST,
+        #         detail="WorkingTime must be greater than 0"
+        #     )
+        #
+        # if settings.TechnologicalSettings.S1Temperature < -50 or \
+        #         settings.TechnologicalSettings.S1Temperature > 150:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_400_BAD_REQUEST,
+        #         detail="S1Temperature out of range (-50 to 150)"
+        #     )
+
+        # Сохраняем настройки (пример)
+        # save_to_database(settings)
+
+        return {
+            "status": "success",
+            "message": "Settings updated successfully",
+            "data": settings.model_dump()
+        }
+
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors()
+        )
+
 # --- WebSocket endpoint (ВАЖНО: используем менеджер) ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    # Добавляем соединение в менеджер
     await manager.connect(websocket)
 
     try:
@@ -214,11 +200,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "timestamp": datetime.now().isoformat()
         })
 
-        print(f"📡 Client connected, sending welcome message")
-
-        # Держим соединение открытым
         while True:
-            # Ждем сообщения от клиента (можно добавить команды)
             try:
                 data = await websocket.receive_text()
                 print(f"📨 Received from client: {data}")
