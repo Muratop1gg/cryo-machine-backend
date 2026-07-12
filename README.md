@@ -2,36 +2,34 @@
 
 ```json
 {
-  "timestamp": "2026-06-17T17:12:45Z", // ISO 8601
-  "system_status": {
-    "current_mode": "autotest", // stdby autotest drying cooling working
-    "error_code": null || [], // 0 ошибок нет, null -ошибки нет массив - список ошибок
-    "vfd1_steam_online": true, // парогенератор для сервисного режима
-    "vfd2_hoist_online": true // лебёдка
+  "SystemStatus": {
+    "currentMode": "autotest", // stdby autotest drying cooling working
+    "errorCode": null || [], // 0 ошибок нет, null -ошибки нет массив - список ошибок
+    "SteamOnline": true, // парогенератор для сервисного режима
+    "HoistOnline": true // лебёдка
   },
-  "telemetry": {
-    "temperatures": {
-      "t0_steam_generator": 45.2,
-      "t1_heater_zone": 28.0,
-      "t2_air_duct": 24.5,
-      "t3_humidity_sensor": 23.8,
-      "t4_chamber_zone": -12.4
+  "Telemetry": {
+    "Temperature": {
+      "SteamGenerator": 0,
+      "HeaterZone": 0,
+      "AirDuct": 0,
+      "Humidity": 0,
+      "ChamberZone": 0
     },
-    "environment": {
-      "h0_air_duct_humidity": 85.0,
-      "h1_chamber_humidity": 40.5,
-      "o0_chamber_oxygen": 20.9,
-      "nitrogen_left": 10 // остаток азота тоже сюда надо
+    "Environment": {
+      "AirDuctHumidity": 0,
+      "ChamberHumidity": 0,
+      "ChamberOxygen": 0,
+      "NitrogenLevel": 0
     },
-    "vfd_status": {
-      "vfd1": {
-        "freq_hz": 30.0,
-        "err_code": "" // null или str
+    "vfdStatus": {
+      "Steam": {
+        "Frequency": 0, // может быть с минусом, направление указывает
+        "ErrorCode": ""
       },
-      "vfd2-status": { // hoist
-        "freq_hz": 50.0,
-        "direction": true, // true - подъемник вверх, false - вниз
-        "err_code": "" // null или str
+      "Hoist": {
+        "Frequency": 0, // может быть с минусом, направление указывает
+        "ErrorCode": ""
       }
     }
   }
