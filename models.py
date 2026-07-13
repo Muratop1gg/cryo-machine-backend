@@ -37,7 +37,7 @@ class RS485Config(BaseModel):
     modbus_unit_id: int = 1
     registers: dict = Field(default_factory=dict)
 
-class OxygenSensorConfig(BaseModel): # <-- ЗАПРОШЕННАЯ МОДЕЛЬ
+class OxygenSensorConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     present: bool
     connection_type: Literal["plc", "rs485"]
@@ -126,7 +126,7 @@ class ZigbeeModemConfig(BaseModel):
     protocol: Literal["znp", "xbee_api", "ezsp"] = "znp"
     coordinator_type: Literal["CC2652P", "CC2531", "CC1352P"] = "CC2652P"
 
-class AppConfig(BaseModel): # <-- ЗАПРОШЕННАЯ МОДЕЛЬ
+class AppConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     network: WifiConfig
     hardware: HardwareConfig
@@ -279,7 +279,6 @@ class Security(BaseModel):
 
 # ================= ИСПОЛНИТЕЛЬНЫЕ УСТРОЙСТВА =================
 
-# Команды
 class BlowerCommand(BaseModel):
     enabled: bool
     frequency_hz: float = Field(ge=0, le=50)
@@ -316,7 +315,7 @@ class AutocalibrationCommand(BaseModel):
     start: bool = True
 
 
-# Статусы (Вложенные модели вместо dict для строгой типизации)
+# Статусы исполнительных устройств
 class BlowerStatus(BaseModel):
     enabled: bool
     frequency_hz: float
@@ -344,7 +343,7 @@ class LedStripStatus(BaseModel):
     color: str
     type: Literal["argb", "rgb"]
 
-class ActuatorStatus(BaseModel): # <-- ЗАПРОШЕННАЯ МОДЕЛЬ
+class ActuatorStatus(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     blower: BlowerStatus
     steam_generator: SteamGeneratorStatus
