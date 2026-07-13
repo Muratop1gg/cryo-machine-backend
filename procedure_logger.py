@@ -25,7 +25,6 @@ class ProcedureLogger:
         LOGS_DIR.mkdir(exist_ok=True)
         ARCHIVE_DIR.mkdir(exist_ok=True)
         
-        self.current_file = None
         self.current_group: Optional[int] = None
         self.procedure_start_time: Optional[datetime] = None
 
@@ -49,7 +48,8 @@ class ProcedureLogger:
             LAST_LOG.rename(archive_path)
             logger.info(f"📦 Previous log archived to {archive_path}")
 
-    def log_event(self, event_id: int, state_code: Optional[str] = None, extra: dict = None):
+    # === ИСПРАВЛЕНИЕ ЗДЕСЬ: extra: Optional[dict] = None ===
+    def log_event(self, event_id: int, state_code: Optional[str] = None, extra: Optional[dict] = None):
         """Логирует изменение event_id. Автоматически открывает новый лог при смене группы."""
         group, subgroup, param = self._parse_event_id(event_id)
         description = self._get_description(group, subgroup, param)
@@ -74,18 +74,24 @@ class ProcedureLogger:
 
     def _start_new_procedure(self, group: int, timestamp: datetime):
         """Открывает новый лог-файл"""
-        if self.current_file is not None:
+        if self.current_group is not None:
             self._archive_previous()
         
         self.current_group = group
         self.procedure_start_time = timestamp
+        
+        group_names = {
+            1: "Простой", 2: "Процедура", 3: "Прохлаждение", 
+            4: "Сушка", 5: "Загрузка N2", 6: "Сервис"
+        }
+        group_name = group_names.get(group, f"Группа {group}")
         
         # Заголовок нового лога
         header = (
             f"{'=' * 70}\n"
             f"PROCEDURE LOG STARTED\n"
             f"Start time: {timestamp:%Y-%m-%d %H:%M:%S}\n"
-            f"Group: {group} ({'Простой' if group == 1 else 'Процедура' if group == 2 else 'Прохлаждение' if group == 3 else 'Сушка' if group == 4 else 'Загрузка N2' if group == 5 else 'Сервис'})\n"
+            f"Group: {group} ({group_name})\n"
             f"{'=' * 70}\n\n"
         )
         with open(LAST_LOG, "w", encoding="utf-8") as f:
@@ -95,10 +101,14 @@ class ProcedureLogger:
 
     def close(self):
         """Завершает текущую процедуру"""
-        if self.current_file is not None:
+        if self.current_group is not None:
             timestamp = datetime.now()
-            with open(LAST_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n{'=' * 70}\nPROCEDURE LOG ENDED: {timestamp:%Y-%m-%d %H:%M:%S}\n{'=' * 70}\n")
+            try:
+                with open(LAST_LOG, "a", encoding="utf-8") as f:
+                    f.write(f"\n{'=' * 70}\nPROCEDURE LOG ENDED: {timestamp:%Y-%m-%d %H:%M:%S}\n{'=' * 70}\n")
+            except Exception as e:
+                logger.error(f"❌ Failed to close procedure log: {e}")
+            
             self._archive_previous()
             self.current_group = None
             self.procedure_start_time = None
