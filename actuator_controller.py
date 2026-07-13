@@ -1,0 +1,172 @@
+import logging
+from typing import Optional
+import models
+
+logger = logging.getLogger(__name__)
+
+
+class ActuatorController:
+    """
+    Транслирует высокоуровневые команды в запись регистров ПЛК.
+    Адреса регистров — из карты ПЛК (заглушки, заменить на реальные).
+    """
+    
+    # Карта регистров для записи команд (адреса — примеры)
+    REGISTERS = {
+        "blower_enable": 300,
+        "blower_frequency": 301,        # float32 (2 регистра)
+        "steam_enable": 303,
+        "steam_frequency": 304,         # float32
+        "steam_direction": 306,         # 0=forward, 1=reverse
+        "patient_hoist": 307,           # 0=stop, 1=up, 2=down
+        "pipe_hoist": 308,              # 0=stop, 1=up, 2=down
+        "heater_enable": 309,
+        "heater_power": 310,            # float32
+        "exhaust_fan_enable": 312,
+        "exhaust_damper": 313,          # 0=closed, 1=open
+        "led_enable": 314,
+        "led_color_r": 315,
+        "led_color_g": 316,
+        "led_color_b": 317,
+    }
+
+    def __init__(self, modbus_client):
+        self.modbus = modbus_client
+        self._last_commands: dict = {}
+
+    async def execute(self, command: models.ActuatorCommand) -> bool:
+        """Выполняет команду на устройстве"""
+        device = command.device
+        payload = command.payload
+        
+        logger.info(f"⚙️ Actuator command: {device} -> {payload}")
+        
+        try:
+            if device == "blower":
+                return await self._set_blower(payload)
+            elif device == "steam_generator":
+                return await self._set_steam_generator(payload)
+            elif device == "patient_hoist":
+                return await self._set_hoist("patient_hoist", payload)
+            elif device == "pipe_hoist":
+                return await self._set_hoist("pipe_hoist", payload)
+            elif device == "heater":
+                return await self._set_heater(payload)
+            elif device == "exhaust_fan":
+                return await self._set_exhaust_fan(payload)
+            elif device == "exhaust_damper":
+                return await self._set_exhaust_damper(payload)
+            elif device == "led_strip":
+                return await self._set_led(payload)
+            else:
+                logger.error(f"❌ Unknown device: {device}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Failed to execute command on {device}: {e}")
+            return False
+
+    async def _set_blower(self, cmd: models.BlowerCommand) -> bool:
+        ok1 = await self.modbus.write_register(
+            self.REGISTERS["blower_enable"], 1 if cmd.enabled else 0
+        )
+        ok2 = await self.modbus.write_register_float(
+            self.REGISTERS["blower_frequency"], cmd.frequency_hz
+        )
+        self._last_commands["blower"] = cmd.model_dump()
+        return ok1 and ok2
+
+    async def _set_steam_generator(self, cmd: models.SteamGeneratorCommand) -> bool:
+        ok1 = await self.modbus.write_register(
+            self.REGISTERS["steam_enable"], 1 if cmd.enabled else 0
+        )
+        ok2 = await self.modbus.write_register_float(
+            self.REGISTERS["steam_frequency"], cmd.frequency_hz
+        )
+        ok3 = await self.modbus.write_register(
+            self.REGISTERS["steam_direction"], 0 if cmd.direction == "forward" else 1
+        )
+        self._last_commands["steam_generator"] = cmd.model_dump()
+        return ok1 and ok2 and ok3
+
+    async def _set_hoist(self, name: str, cmd: models.HoistCommand) -> bool:
+        state_map = {"stop": 0, "up": 1, "down": 2}
+        ok = await self.modbus.write_register(
+            self.REGISTERS[name], state_map[cmd.state]
+        )
+        self._last_commands[name] = cmd.model_dump()
+        return ok
+
+    async def _set_heater(self, cmd: models.HeaterCommand) -> bool:
+        ok1 = await self.modbus.write_register(
+            self.REGISTERS["heater_enable"], 1 if cmd.enabled else 0
+        )
+        ok2 = await self.modbus.write_register_float(
+            self.REGISTERS["heater_power"], cmd.power_w
+        )
+        self._last_commands["heater"] = cmd.model_dump()
+        return ok1 and ok2
+
+    async def _set_exhaust_fan(self, cmd: models.ExhaustFanCommand) -> bool:
+        ok = await self.modbus.write_register(
+            self.REGISTERS["exhaust_fan_enable"], 1 if cmd.enabled else 0
+        )
+        self._last_commands["exhaust_fan"] = cmd.model_dump()
+        return ok
+
+    async def _set_exhaust_damper(self, cmd: models.ExhaustDamperCommand) -> bool:
+        ok = await self.modbus.write_register(
+            self.REGISTERS["exhaust_damper"], 1 if cmd.state == "open" else 0
+        )
+        self._last_commands["exhaust_damper"] = cmd.model_dump()
+        return ok
+
+    async def _set_led(self, cmd: models.LedStripCommand) -> bool:
+        # Парсим HEX в RGB
+        color = cmd.color.lstrip("#")
+        r, g, b = int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+        
+        ok1 = await self.modbus.write_register(
+            self.REGISTERS["led_enable"], 1 if cmd.enabled else 0
+        )
+        ok2 = await self.modbus.write_register(self.REGISTERS["led_color_r"], r)
+        ok3 = await self.modbus.write_register(self.REGISTERS["led_color_g"], g)
+        ok4 = await self.modbus.write_register(self.REGISTERS["led_color_b"], b)
+        
+        self._last_commands["led_strip"] = cmd.model_dump()
+        return ok1 and ok2 and ok3 and ok4
+
+    def get_status(self, raw_stats: dict, raw_inputs: dict) -> models.ActuatorStatus:
+        """
+        Формирует статусы устройств из сырых данных ПЛК.
+        Вызывается при каждом опросе Modbus.
+        """
+        # Маппинг stats -> статусы устройств
+        # stats: patient_hoist, pipe_hoist, steam, charger, heater, exhaust
+        # (0-стоп, 1-вкл/вверх, 2-работа/вниз, 3-остановка, 4-авария)
+        
+        hoist_state_map = {0: "stop", 1: "up", 2: "down", 3: "stop"}  # 3=авария -> стоп
+        
+        return models.ActuatorStatus(
+            blower={
+                "enabled": raw_stats.get("charger", 0) == 1,
+                "frequency_hz": 0.0  # брать из телеметрии vfdStatus.Steam
+            },
+            steam_generator={
+                "enabled": raw_stats.get("steam", 0) in [1, 2],
+                "frequency_hz": 0.0,  # из vfdStatus.Hoist
+                "direction": "forward"
+            },
+            patient_hoist={"state": hoist_state_map.get(raw_stats.get("patient_hoist", 0), "stop")},
+            pipe_hoist={"state": hoist_state_map.get(raw_stats.get("pipe_hoist", 0), "stop")},
+            heater={
+                "enabled": raw_stats.get("heater", 0) == 1,
+                "power_w": 0
+            },
+            exhaust_fan={"enabled": raw_stats.get("exhaust", 0) in [1, 2]},
+            exhaust_damper={"state": "open"},  # нужно читать из отдельного регистра
+            led_strip={"enabled": False, "color": "#000000", "type": "rgb"},
+        )
+
+
+# Глобальный экземпляр (инициализируется в main.py)
+actuator_controller: Optional[ActuatorController] = None

@@ -1,130 +1,258 @@
 from typing import Literal, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
+import time
 
-# --- Типы и перечисления ---
-SystemMode = Literal["stdby", "standby", "autotest", "drying", "cooling", "working"]
+# --- Типы ---
+SystemMode = Literal["stdby", "autotest", "drying", "cooling", "working"]
 
-# --- Модели для телеметрии и статуса (Бэк -> Фронт) ---
+# ========== МОДЕЛИ ДЛЯ ОТОБРАЖЕНИЯ (БЭК → ФРОНТ) ==========
+
 class SystemStatusModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     currentMode: SystemMode
-    errorCode: Optional[List[str]] = Field(default=None, alias="errorCode")
-    SteamOnline: bool = Field(alias="SteamOnline")
-    HoistOnline: bool = Field(alias="HoistOnline")
+    errorCode: Optional[List[str]] = None
+    SteamOnline: bool
+    HoistOnline: bool
+
 
 class VFDModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    Frequency: float = Field(alias="Frequency")
-    ErrorCode: str = Field(alias="ErrorCode")
+    Frequency: float
+    ErrorCode: str
+
 
 class VFDStatusesModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    Steam: VFDModel = Field(alias="Steam")
-    Hoist: VFDModel = Field(alias="Hoist")
+    Steam: VFDModel
+    Hoist: VFDModel
+
 
 class TemperatureModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    SteamGenerator: float = Field(alias="SteamGenerator")
-    HeaterZone: float = Field(alias="HeaterZone")
-    AirDuct: float = Field(alias="AirDuct")
-    Average: float = Field(alias="Average")
-    ChamberZone: float = Field(alias="ChamberZone")
+    SteamGenerator: float
+    HeaterZone: float
+    AirDuct: float
+    Average: float
+    ChamberZone: float
+
 
 class EnvironmentModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    AirDuctHumidity: float = Field(alias="AirDuctHumidity")
-    ChamberHumidity: float = Field(alias="ChamberHumidity")
-    ChamberOxygen: float = Field(alias="ChamberOxygen")
-    NitrogenLevel: float = Field(alias="NitrogenLevel")
+    AirDuctHumidity: float
+    ChamberHumidity: float
+    ChamberOxygen: float
+    NitrogenLevel: float
+
 
 class TelemetryModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    Temperature: TemperatureModel = Field(alias="Temperature")
-    Environment: EnvironmentModel = Field(alias="Environment")
-    vfdStatus: VFDStatusesModel = Field(alias="vfdStatus")
+    Temperature: TemperatureModel
+    Environment: EnvironmentModel
+    vfdStatus: VFDStatusesModel
+
 
 class SensorData(BaseModel):
+    """Основная телеметрия (по запросу с фронта)"""
     model_config = ConfigDict(populate_by_name=True)
-    SystemStatus: SystemStatusModel = Field(alias="SystemStatus")
-    Telemetry: TelemetryModel = Field(alias="Telemetry")
+    SystemStatus: SystemStatusModel
+    Telemetry: TelemetryModel
 
-# --- Модели цифровых входов и статистики (Бэк -> Фронт) ---
-class HoistInputs(BaseModel):
+
+# ========== ЦИФРОВЫЕ ВХОДЫ И СТАТИСТИКА ==========
+
+class Hoist(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     lsw_top_emergency: bool
     lsw_top_working: bool
     lsw_bottom_working: bool
     lsw_bottom_emergency: bool
 
-class PatientHoistInputs(HoistInputs):
+
+class PatientHoist(Hoist):
     patient_present: bool
 
-class SafetyInputs(BaseModel):
+
+class SafetyModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     estop_pressed: bool
     cabinet_door_open: bool
 
+
 class DigitalInputs(BaseModel):
+    """Концевики и безопасность"""
     model_config = ConfigDict(populate_by_name=True)
-    pipe_hoist: HoistInputs
-    patient_hoist: PatientHoistInputs
-    safety: SafetyInputs
+    pipe_hoist: Hoist
+    patient_hoist: PatientHoist
+    safety: SafetyModel
+
 
 class StatsModel(BaseModel):
+    """Статусы оборудования"""
     model_config = ConfigDict(populate_by_name=True)
     patient_hoist: int  # 0-стоп, 1-вверх, 2-вниз, 3-авария
-    pipe_hoist: int     # 0-стоп, 1-вверх, 2-вниз, 3-авария
-    steam: int          # 0-стоп, 1-вкл, 2-работа, 3-остановка, 4-авария
-    charger: int        # 0-стоп, 1-работа, 2-авария
-    heater: int         # 0-стоп, 1-работа, 2-авария
-    exhaust: int        # 0-стоп, 1-вкл, 2-работа, 3-остановка, 4-авария
+    pipe_hoist: int      # 0-стоп, 1-вверх, 2-вниз, 3-авария
+    steam: int           # 0-стоп, 1-вкл, 2-работа, 3-остановка, 4-авария
+    charger: int         # 0-стоп, 1-работа, 2-авария
+    heater: int          # 0-стоп, 1-работа, 2-авария
+    exhaust: int         # 0-стоп, 1-вкл, 2-работа, 3-остановка, 4-авария
 
-# --- Модели событий (Бэк -> Фронт) ---
-class Event(BaseModel):
+
+# ========== СИСТЕМНАЯ ИНФОРМАЦИЯ ==========
+
+class SystemInfo(BaseModel):
+    """Расширенная системная информация + концевики"""
     model_config = ConfigDict(populate_by_name=True)
-    event_id: int = Field(alias="event_id")
-    state_code: Optional[str] = Field(default=None, alias="state_code") # Та самая строка "abc"
+    
+    # Системные данные
+    hostname: str
+    os: str
+    python_version: str
+    app_version: str
+    uptime_seconds: float
+    started_at: str
+    
+    # Статусы подключений
+    modbus_connected: bool
+    zigbee_connected: bool
+    o2_sensor_connected: bool
+    
+    # Текущая телеметрия
+    SystemStatus: SystemStatusModel
+    Telemetry: TelemetryModel
+    digital_inputs: DigitalInputs
+    stats: StatsModel
 
-# --- Модели команд с Фронта (Фронт -> Бэк) ---
+
+# ========== СОБЫТИЯ ОТ ПЛК ==========
+
+class Event(BaseModel):
+    """Событие от ПЛК (event_id + строка состояния)"""
+    model_config = ConfigDict(populate_by_name=True)
+    event_id: int
+    state_code: Optional[str] = None  # Строка "abc" из README
+    timestamp: float = Field(default_factory=time.time)
+
+
+# ========== КОМАНДЫ С ФРОНТА (ФРОНТ → БЭК) ==========
+
 class ModeSelection(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     mode: SystemMode
 
+
 class TechnologicalSettingsModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    time_s1_sec: int = Field(alias="time_s1_sec")
-    time_s2_sec: int = Field(alias="time_s2_sec")
-    time_s3_sec: int = Field(alias="time_s3_sec")
-    temperature_sp1: float = Field(alias="temperature_sp1")
-    temperature_sp2: float = Field(alias="temperature_sp2")
+    time_s1_sec: int
+    time_s2_sec: int
+    time_s3_sec: int
+    temperature_sp1: float
+    temperature_sp2: float
+
 
 class UpdateSettings(BaseModel):
-    """Полный POST запрос настроек с фронта"""
+    """POST /api/settings"""
     model_config = ConfigDict(populate_by_name=True)
-    mode_selection: ModeSelection = Field(alias="mode_selection")
-    technological_settings: TechnologicalSettingsModel = Field(alias="technological_settings")
+    mode_selection: ModeSelection
+    technological_settings: TechnologicalSettingsModel
+
 
 class MotionCommands(BaseModel):
+    """POST /api/motion — команды лебёдкам"""
     model_config = ConfigDict(populate_by_name=True)
-    patient_hoist: Optional[bool] = Field(default=None, alias="patient_hoist") # true-вверх, false-вниз, null-стоп
-    pipe_hoist: Optional[bool] = Field(default=None, alias="pipe_hoist")
+    patient_hoist: Optional[bool] = None  # true=вверх, false=вниз, null=стоп
+    pipe_hoist: Optional[bool] = None     # true=вверх, false=вниз, null=стоп
+
 
 class UiButtons(BaseModel):
+    """POST /api/ui_buttons — дубли кнопок контроллера"""
     model_config = ConfigDict(populate_by_name=True)
-    btn_ok: bool = Field(alias="btn_ok")
-    btn_esc: bool = Field(alias="btn_esc")
-    btn_reset_fault: bool = Field(alias="btn_reset_fault")
-    btn_bypass_confirm: bool = Field(alias="btn_bypass_confirm")
+    btn_ok: bool
+    btn_esc: bool
+    btn_reset_fault: bool
+    btn_bypass_confirm: bool
+
 
 class Security(BaseModel):
+    """POST /api/security — разблокировка"""
     model_config = ConfigDict(populate_by_name=True)
-    system_code_long: str = Field(alias="system_code_long")
+    system_code_long: str
 
-# --- Универсальная модель входящего WebSocket/POST сообщения от фронта ---
-class FrontendCommand(BaseModel):
+
+# ========== УПРАВЛЕНИЕ ИСПОЛНИТЕЛЬНЫМИ УСТРОЙСТВАМИ ==========
+
+class BlowerCommand(BaseModel):
+    enabled: bool
+    frequency_hz: float = Field(ge=0, le=50)
+
+
+class SteamGeneratorCommand(BaseModel):
+    enabled: bool
+    frequency_hz: float = Field(ge=0, le=50)
+    direction: Literal["forward", "reverse"] = "forward"
+
+
+class HoistCommand(BaseModel):
+    state: Literal["stop", "up", "down"]
+
+
+class HeaterCommand(BaseModel):
+    enabled: bool
+    power_w: float = Field(default=500, ge=0, le=500)
+
+
+class ExhaustFanCommand(BaseModel):
+    enabled: bool
+
+
+class ExhaustDamperCommand(BaseModel):
+    state: Literal["open", "closed"]
+
+
+class LedStripCommand(BaseModel):
+    enabled: bool
+    color: str = "#000000"
+    type: Literal["argb", "rgb"] = "rgb"
+
+
+class ActuatorCommand(BaseModel):
+    """Универсальная команда для исполнительных устройств"""
     model_config = ConfigDict(populate_by_name=True)
-    update_settings: Optional[UpdateSettings] = Field(default=None, alias="update_settings")
-    motion_commands: Optional[MotionCommands] = Field(default=None, alias="motion_commands")
-    ui_buttons: Optional[UiButtons] = Field(default=None, alias="ui_buttons")
-    security: Optional[Security] = Field(default=None, alias="security")
-    # Можно добавить service_event и другие по мере необходимости
+    device: Literal[
+        "blower", "steam_generator", "patient_hoist", "pipe_hoist",
+        "heater", "exhaust_fan", "exhaust_damper", "led_strip"
+    ]
+    payload: dict  # Одна из команд выше
+
+
+# ========== АВТОКАЛИБРОВКА ==========
+
+class AutocalibrationCommand(BaseModel):
+    start: bool = True
+
+
+# ========== ОТВЕТЫ API ==========
+
+class CommandResponse(BaseModel):
+    """Ответ на команду с подтверждением от ПЛК"""
+    model_config = ConfigDict(populate_by_name=True)
+    status: Literal["success", "error", "timeout"]
+    message: str
+    event_id: Optional[int] = None  # Подтверждение от ПЛК
+    data: Optional[dict] = None
+
+
+class LogResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    content: str
+    lines_count: int
+    last_modified: Optional[str] = None
+
+
+class ConfigResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    network: dict
+    hardware: dict
+    defaults: dict
+    modbus_plc: dict
+    zigbee_modem: dict

@@ -1,0 +1,161 @@
+{
+  "network": {
+    "wifi_ssid": "Clinic_Network",
+    "wifi_password": "secret123",
+    "wifi_security": "WPA2"
+  },
+
+  "hardware": {
+    "nitrogen_mass_sensor": {
+      "present": true,
+      "connection": "zigbee",
+      "zigbee_ieee_address": "00:11:22:33:44:55:66:77",
+      "platform": "XIAO_ESP32C6"
+    },
+
+    "zigbee_remote": {
+      "present": true,
+      "connection": "zigbee",
+      "zigbee_ieee_address": "AA:BB:CC:DD:EE:FF:00:11",
+      "button_map": {
+        "btn_sleep": {
+          "zigbee_cluster_id": "0x0006",
+          "zigbee_command": "off",
+          "keyboard_key": "s"
+        },
+        "btn_start_stop": {
+          "zigbee_cluster_id": "0x0006",
+          "zigbee_command": "toggle",
+          "keyboard_key": " "
+        },
+        "btn_mode": {
+          "zigbee_cluster_id": "0x0008",
+          "zigbee_command": "move_to_level",
+          "keyboard_key": "m"
+        },
+        "btn_back": {
+          "zigbee_cluster_id": "0x0008",
+          "zigbee_command": "stop",
+          "keyboard_key": "backspace"
+        },
+        "btn_timer_up": {
+          "zigbee_cluster_id": "0x0008",
+          "zigbee_command": "move_up",
+          "keyboard_key": "up"
+        },
+        "btn_timer_down": {
+          "zigbee_cluster_id": "0x0008",
+          "zigbee_command": "move_down",
+          "keyboard_key": "down"
+        },
+        "btn_hoist_up": {
+          "zigbee_cluster_id": "0x0102",
+          "zigbee_command": "up_open",
+          "keyboard_key": "w"
+        },
+        "btn_hoist_down": {
+          "zigbee_cluster_id": "0x0102",
+          "zigbee_command": "down_close",
+          "keyboard_key": "a"
+        },
+        "btn_pipe_up": {
+          "zigbee_cluster_id": "0x0102",
+          "zigbee_command": "up_open",
+          "keyboard_key": "d"
+        },
+        "btn_pipe_down": {
+          "zigbee_cluster_id": "0x0102",
+          "zigbee_command": "down_close",
+          "keyboard_key": "s"
+        }
+      }
+    },
+
+    "steam_generator": {
+      "drive_type": "vfd",
+      "vfd_model": "GD27-075",
+      "modbus_unit_id": 2,
+      "adaptive_control": true,
+      "max_frequency_hz": 50.0,
+      "min_frequency_hz": 5.0
+    },
+
+    "oxygen_sensor": {
+      "present": true,
+      "connection_type": "rs485",
+      "rs485": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 9600,
+        "bytesize": 8,
+        "parity": "N",
+        "stopbits": 1,
+        "timeout": 1.0,
+        "modbus_unit_id": 10,
+        "registers": {
+          "o2_percent": 0,
+          "temperature": 2,
+          "humidity": 4
+        }
+      }
+    },
+
+    "patient_hoist": {
+      "present": true,
+      "vfd_model": "GD27-075",
+      "modbus_unit_id": 3,
+      "max_frequency_hz": 25.0,
+      "has_load_cell": true
+    },
+
+    "led_strip": {
+      "present": true,
+      "type": "argb",
+      "led_count": 60,
+      "gpio_pin": 18
+    },
+
+    "pulse_sensor": {
+      "present": false,
+      "connection": "bluetooth",
+      "ble_device_mac": null
+    },
+
+    "speaker": {
+      "present": true,
+      "device": "hw:0,0",
+      "default_volume": 70
+    }
+  },
+
+  "zigbee_modem": {
+    "port": "/dev/ttyUSB1",
+    "baudrate": 115200,
+    "protocol": "znp",
+    "coordinator_type": "CC2652P"
+  },
+
+  "defaults": {
+    "procedure": {
+      "working_time_sec": 30,
+      "waiting_time_sec": 10,
+      "total_time_sec": 5,
+      "target_temperature_c": -110.0
+    },
+    "precooling": {
+      "target_temperature_c": -80.0,
+      "duration_sec": 300
+    },
+    "drying": {
+      "duration_sec": 600,
+      "target_temperature_c": 40.0
+    }
+  },
+
+  "modbus_plc": {
+    "host": "192.168.1.100",
+    "port": 502,
+    "unit_id": 1,
+    "poll_interval_fast_ms": 100,
+    "poll_interval_slow_ms": 500
+  }
+}
