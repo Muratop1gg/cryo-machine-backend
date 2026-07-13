@@ -13,7 +13,7 @@
       "SteamGenerator": 0,
       "HeaterZone": 0,
       "AirDuct": 0,
-      "Humidity": 0,
+      "Average": 0,
       "ChamberZone": 0
     },
     "Environment": {
@@ -35,6 +35,8 @@
   }
 }
 ```
+
+
 
 ИВЕНТЫ С БЭКА ПО ЗАПРОСУ (БЫСТРЫЕ)
 

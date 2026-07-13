@@ -30,7 +30,7 @@ class TemperatureModel(BaseModel):
     SteamGenerator: float
     HeaterZone: float
     AirDuct: float
-    Humidity: float
+    Average: float
     ChamberZone: float
 
 class EnvironmentModel(BaseModel):

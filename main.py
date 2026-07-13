@@ -73,20 +73,43 @@ manager = ConnectionManager()
 # --- Генераторы данных ---
 async def sensor_data_generator():
     sequence = 0
+    # Начальная температура
+    current_temp = random.uniform(-200, -100)
+    
     while True:
         await asyncio.sleep(0.2)
         sequence += 1
+        
+        # Плавное изменение температуры (шаг ±0.5 градуса)
+        # Но остаемся в диапазоне от -200 до -100
+        change = random.uniform(-0.5, 0.5)
+        current_temp = max(-200, min(-100, current_temp + change))
+        
         ss = models.SystemStatusModel(
-            currentMode= "cooling",
-            errorCode = [],
-            SteamOnline = True,
-            HoistOnline= True,
+            currentMode="cooling",
+            errorCode=[],
+            SteamOnline=True,
+            HoistOnline=True,
         )
 
         t = models.TelemetryModel(
-            Temperature = models.TemperatureModel(SteamGenerator=0, HeaterZone=0, AirDuct=0, Humidity=0, ChamberZone=0),
-            Environment = models.EnvironmentModel(AirDuctHumidity=0,ChamberHumidity = 0,ChamberOxygen = 0,NitrogenLevel = 0),
-            vfdStatus = models.VFDStatusesModel(Steam= models.VFDModel(Frequency=0, ErrorCode=""), Hoist=models.VFDModel(Frequency=0, ErrorCode="")),
+            Temperature=models.TemperatureModel(
+                SteamGenerator=0, 
+                HeaterZone=0, 
+                AirDuct=0, 
+                Average=round(current_temp, 1),  # Округляем до 1 знака
+                ChamberZone=0
+            ),
+            Environment=models.EnvironmentModel(
+                AirDuctHumidity=0,
+                ChamberHumidity=0,
+                ChamberOxygen=0,
+                NitrogenLevel=0
+            ),
+            vfdStatus=models.VFDStatusesModel(
+                Steam=models.VFDModel(Frequency=0, ErrorCode=""), 
+                Hoist=models.VFDModel(Frequency=0, ErrorCode="")
+            ),
         )
 
         sensor_data = models.SensorData(
