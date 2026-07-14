@@ -100,3 +100,87 @@ class UnlockEvent(BaseModel):
 class ServiceEvent(BaseModel):
     type: str
     value: str
+
+
+# ========== МОДЕЛИ ДЛЯ КОМАНД ПРОЦЕДУРЫ ==========
+
+class StartProcedure(BaseModel):
+    """Модель для команды запуска процедуры"""
+    # Можно добавить дополнительные параметры при необходимости
+    pass
+
+class PauseProcedure(BaseModel):
+    """Модель для команды паузы процедуры"""
+    pass
+
+class ResumeProcedure(BaseModel):
+    """Модель для команды возобновления процедуры"""
+    pass
+
+class StopProcedure(BaseModel):
+    """Модель для команды остановки процедуры"""
+    pass
+
+
+# ========== МОДЕЛИ ДЛЯ АКТУАТОРОВ ==========
+
+class BlowerCommand(BaseModel):
+    enabled: bool
+    frequency_hz: float
+
+class SteamGeneratorCommand(BaseModel):
+    enabled: bool
+    frequency_hz: float
+    direction: Literal['forward', 'reverse']
+
+class HoistCommand(BaseModel):
+    state: Literal['stop', 'up', 'down']
+
+class HeaterCommand(BaseModel):
+    enabled: bool
+    power_w: float
+
+class ExhaustFanCommand(BaseModel):
+    enabled: bool
+
+class ExhaustDamperCommand(BaseModel):
+    state: Literal['open', 'closed']
+
+class LedStripCommand(BaseModel):
+    enabled: bool
+    color: str
+    type: Literal['argb', 'rgb']
+
+class ActuatorCommand(BaseModel):
+    device: Literal[
+        'blower', 
+        'steam_generator', 
+        'patient_hoist', 
+        'pipe_hoist',
+        'heater', 
+        'exhaust_fan', 
+        'exhaust_damper', 
+        'led_strip'
+    ]
+    payload: BlowerCommand | SteamGeneratorCommand | HoistCommand | \
+             HeaterCommand | ExhaustFanCommand | ExhaustDamperCommand | \
+             LedStripCommand
+
+
+# ========== МОДЕЛИ ДЛЯ ОТВЕТОВ ==========
+
+class CommandResponse(BaseModel):
+    status: Literal['success', 'error', 'timeout']
+    message: str
+    event_id: int | None = None
+    data: dict | None = None
+
+
+# ========== МОДЕЛИ ДЛЯ СТАТУСА ПРОЦЕДУРЫ ==========
+
+class ProcedureStatus(BaseModel):
+    status: Literal['stopped', 'running', 'paused']
+    is_running: bool
+    is_paused: bool
+    start_time: str | None = None
+    elapsed_time: float

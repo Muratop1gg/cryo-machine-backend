@@ -3,6 +3,7 @@ import asyncio
 import json
 from datetime import datetime
 import random
+from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
@@ -14,7 +15,7 @@ import models
 # --- Глобальный менеджер соединений ---
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: models.List[WebSocket] = []
+        self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -70,6 +71,53 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+# --- Состояние процедуры ---
+class ProcedureState:
+    def __init__(self):
+        self.is_running = False
+        self.is_paused = False
+        self.start_time = None
+        self.elapsed_time = 0
+
+    def start(self):
+        self.is_running = True
+        self.is_paused = False
+        self.start_time = datetime.now()
+        self.elapsed_time = 0
+        print("🟢 Procedure started")
+
+    def pause(self):
+        if self.is_running and not self.is_paused:
+            self.is_paused = True
+            if self.start_time is not None:
+                self.elapsed_time += (datetime.now() - self.start_time).total_seconds()
+            print("⏸️ Procedure paused")
+
+    def resume(self):
+        if self.is_running and self.is_paused:
+            self.is_paused = False
+            self.start_time = datetime.now()
+            print("▶️ Procedure resumed")
+
+    def stop(self):
+        if self.is_running:
+            self.is_running = False
+            self.is_paused = False
+            self.elapsed_time = 0
+            self.start_time = None
+            print("⏹️ Procedure stopped")
+
+    def get_status(self):
+        if not self.is_running:
+            return "stopped"
+        if self.is_paused:
+            return "paused"
+        return "running"
+
+
+procedure_state = ProcedureState()
+
+
 # --- Генераторы данных ---
 async def sensor_data_generator():
     sequence = 0
@@ -97,7 +145,7 @@ async def sensor_data_generator():
                 SteamGenerator=0, 
                 HeaterZone=0, 
                 AirDuct=0, 
-                Average=round(current_temp, 1),  # Округляем до 1 знака
+                Average=round(current_temp, 1),
                 ChamberZone=0
             ),
             Environment=models.EnvironmentModel(
@@ -138,7 +186,6 @@ async def broadcast_events_loop():
         await manager.broadcast_event(event)
 
 
-
 # --- Lifespan ---
 @asynccontextmanager
 async def lifespan(myapp: FastAPI):
@@ -170,11 +217,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/api/status")
 async def get_status():
     return {
         "status": "running",
-        "active_connections": len(manager.active_connections)
+        "active_connections": len(manager.active_connections),
+        "procedure_status": procedure_state.get_status()
     }
 
 
@@ -182,18 +231,18 @@ async def get_status():
 async def update_settings(settings: models.UpdateSettings):
     try:
         # Валидация значений
-        # if settings.TechnologicalSettings.WorkingTime <= 0:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #         detail="WorkingTime must be greater than 0"
-        #     )
-        #
-        # if settings.TechnologicalSettings.S1Temperature < -50 or \
-        #         settings.TechnologicalSettings.S1Temperature > 150:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #         detail="S1Temperature out of range (-50 to 150)"
-        #     )
+        if settings.TechnologicalSettings.WorkingTime <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="WorkingTime must be greater than 0"
+            )
+        
+        if settings.TechnologicalSettings.S1Temperature < -50 or \
+                settings.TechnologicalSettings.S1Temperature > 150:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="S1Temperature out of range (-50 to 150)"
+            )
 
         # Сохраняем настройки (пример)
         # save_to_database(settings)
@@ -210,7 +259,170 @@ async def update_settings(settings: models.UpdateSettings):
             detail=e.errors()
         )
 
-# --- WebSocket endpoint (ВАЖНО: используем менеджер) ---
+
+# ========== ЭНДПОИНТЫ УПРАВЛЕНИЯ ПРОЦЕДУРОЙ ==========
+
+@app.post("/api/procedure/start")
+async def start_procedure(cmd: Optional[models.StartProcedure] = None):
+    """Запуск процедуры"""
+    try:
+        if procedure_state.is_running and not procedure_state.is_paused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is already running"
+            )
+
+        # Если процедура на паузе, просто возобновляем
+        if procedure_state.is_paused:
+            procedure_state.resume()
+            # Отправляем событие возобновления
+            event = models.Event(EventType=102)  # Resume event
+            await manager.broadcast_event(event)
+            return {
+                "status": "success",
+                "message": "Procedure resumed",
+                "data": {"procedure_status": procedure_state.get_status()}
+            }
+
+        # Запускаем новую процедуру
+        procedure_state.start()
+        
+        # Отправляем событие запуска
+        event = models.Event(EventType=100)  # Start event
+        await manager.broadcast_event(event)
+        
+        return {
+            "status": "success",
+            "message": "Procedure started successfully",
+            "data": {
+                "procedure_status": procedure_state.get_status(),
+                "start_time": procedure_state.start_time.isoformat() if procedure_state.start_time else None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start procedure: {str(e)}"
+        )
+
+@app.post("/api/procedure/pause")
+async def pause_procedure(cmd: Optional[models.PauseProcedure] = None):
+    """Пауза процедуры"""
+    try:
+        if not procedure_state.is_running:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is not running"
+            )
+
+        if procedure_state.is_paused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is already paused"
+            )
+
+        procedure_state.pause()
+        
+        # Отправляем событие паузы
+        event = models.Event(EventType=101)  # Pause event
+        await manager.broadcast_event(event)
+        
+        return {
+            "status": "success",
+            "message": "Procedure paused",
+            "data": {
+                "procedure_status": procedure_state.get_status(),
+                "elapsed_time": procedure_state.elapsed_time
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to pause procedure: {str(e)}"
+        )
+
+
+@app.post("/api/procedure/resume")
+async def resume_procedure(cmd: Optional[models.ResumeProcedure] = None):
+    """Возобновление процедуры после паузы"""
+    try:
+        if not procedure_state.is_running:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is not running"
+            )
+
+        if not procedure_state.is_paused:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is not paused"
+            )
+
+        procedure_state.resume()
+        
+        # Отправляем событие возобновления
+        event = models.Event(EventType=102)  # Resume event
+        await manager.broadcast_event(event)
+        
+        return {
+            "status": "success",
+            "message": "Procedure resumed",
+            "data": {
+                "procedure_status": procedure_state.get_status(),
+                "elapsed_time": procedure_state.elapsed_time
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to resume procedure: {str(e)}"
+        )
+
+
+@app.post("/api/procedure/stop")
+async def stop_procedure(cmd: Optional[models.StopProcedure] = None):
+    """Остановка процедуры"""
+    try:
+        if not procedure_state.is_running:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Procedure is not running"
+            )
+
+        procedure_state.stop()
+        
+        # Отправляем событие остановки
+        event = models.Event(EventType=103)  # Stop event
+        await manager.broadcast_event(event)
+        
+        return {
+            "status": "success",
+            "message": "Procedure stopped",
+            "data": {
+                "procedure_status": procedure_state.get_status(),
+                "total_elapsed_time": procedure_state.elapsed_time
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to stop procedure: {str(e)}"
+        )
+
+
+# --- WebSocket endpoint ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -220,6 +432,18 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_json({
             "type": "connection_established",
             "message": "Connected to sensor data stream",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Отправляем текущий статус процедуры
+        await websocket.send_json({
+            "type": "procedure_status",
+            "data": {
+                "status": procedure_state.get_status(),
+                "is_running": procedure_state.is_running,
+                "is_paused": procedure_state.is_paused,
+                "elapsed_time": procedure_state.elapsed_time
+            },
             "timestamp": datetime.now().isoformat()
         })
 
@@ -242,6 +466,19 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         manager.disconnect(websocket)
 
+
+# ========== ДОПОЛНИТЕЛЬНЫЙ ЭНДПОИНТ ДЛЯ СТАТУСА ПРОЦЕДУРЫ ==========
+
+@app.get("/api/procedure/status")
+async def get_procedure_status():
+    """Получение текущего статуса процедуры"""
+    return {
+        "status": procedure_state.get_status(),
+        "is_running": procedure_state.is_running,
+        "is_paused": procedure_state.is_paused,
+        "start_time": procedure_state.start_time.isoformat() if procedure_state.start_time else None,
+        "elapsed_time": procedure_state.elapsed_time
+    }
 
 if __name__ == "__main__":
     import uvicorn
