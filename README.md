@@ -1,221 +1,85 @@
-ИВЕНТ ПО ЗАПРОСУ С ФРОНТА (ОБЫЧНЫЕ)
+# Vent Backend (FastAPI)
 
-```json
-{
-  "SystemStatus": {
-    "currentMode": "autotest", // stdby autotest drying cooling working
-    "errorCode": null || [], // 0 ошибок нет, null -ошибки нет массив - список ошибок
-    "SteamOnline": true, // парогенератор для сервисного режима
-    "HoistOnline": true // лебёдка
-  },
-  "Telemetry": {
-    "Temperature": {
-      "SteamGenerator": 0,
-      "HeaterZone": 0,
-      "AirDuct": 0,
-      "Average": 0,
-      "ChamberZone": 0
-    },
-    "Environment": {
-      "AirDuctHumidity": 0,
-      "ChamberHumidity": 0,
-      "ChamberOxygen": 0,
-      "NitrogenLevel": 0
-    },
-    "vfdStatus": {
-      "Steam": {
-        "Frequency": 0, // может быть с минусом, направление указывает
-        "ErrorCode": ""
-      },
-      "Hoist": {
-        "Frequency": 0, // может быть с минусом, направление указывает
-        "ErrorCode": ""
-      }
-    }
-  }
-}
+Бэкенд для панели управления вент. установкой, реализующий REST/WS API из
+README фронтенда.
+
+## Структура
+
+```
+app/
+  main.py         # FastAPI-приложение, все REST-эндпоинты, WS-эндпоинт /ws
+  models.py       # Pydantic-модели по TS-интерфейсам из README фронта
+  storage.py      # чтение/запись config.json и settings.json (атомарно)
+  hardware.py     # ТОЧКА ИНТЕГРАЦИИ с протоколом контроллера (см. ниже)
+  ws_manager.py   # менеджер WS-подключений, broadcast, разбор входящих сообщений
+requirements.txt
 ```
 
+## Запуск
 
-
-ИВЕНТЫ С БЭКА ПО ЗАПРОСУ (БЫСТРЫЕ)
-
-```json
-"digital_inputs": {
-    "pipe_hoist": {
-      "lsw_top_emergency": false,
-      "lsw_top_working": false,
-      "lsw_bottom_working": true,
-      "lsw_bottom_emergency": false
-    },
-    "patient_hoist": {
-      "lsw_top_emergency": false,
-      "lsw_top_working": false,
-      "lsw_bottom_working": true,
-      "lsw_bottom_emergency": false,
-      "patient_present": true
-    },
-    "safety": {
-      "estop_pressed": false,
-      "cabinet_door_open": true
-    }
-  }
-"stats": {
-    "patient_hoist": 0,   // 0 - стоп	1 - движение вверх 2 - движение вниз 3 - авария
-    "pipe_hoist": 0,      // 0 - стоп	1 - движение вверх 2 - движение вниз 3 - авария
-    "steam": 0,           // 0 - стоп 1 - включение 2 - работа 3 - остановка 4 - авария
-    "charger": 0,         // 0 - стоп 1 - работа 2 - авария
-    "heater": 0,          // 0 - стоп 1 - работа 2 - авария
-    "exhaust": 0          // 0 - стоп 1 - включение 2 - работа 3 - остановка 4 - авария
-  }
+```bash
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+export VENT_DATA_DIR=/var/lib/vent-backend   # необязательно, по умолчанию этот путь
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-ИВЕНТ С БЭКА
+По умолчанию включен `VENT_MOCK_HARDWARE=1` - `hardware.py` отдаёт
+рандомные, но валидные данные и просто логирует команды, так что можно
+поднять бэкенд и погонять фронт ещё до подключения реального протокола.
+Отключается через `export VENT_MOCK_HARDWARE=0`.
+
+## Что нужно доделать (интеграция с контроллером)
+
+Вся логика общения по вашему протоколу с вент. контроллером сознательно
+не реализована - в `app/hardware.py` для каждой операции есть функция с
+комментарием `# TODO: PROTOCOL`, куда нужно подставить реальный вызов:
+
+- `get_sensors_data()` - опрос текущего состояния для `sensors_data` (дергается раз в 0.2с)
+- `send_procedure_action(action)` - `/api/change-procedure-state/`
+- `start_self_test(type)` / `stop_self_test()` - `/api/self-test/*`
+- `apply_settings(settings)` - `/api/update-settings`
+- `request_unlock()` / `check_unlock_code(code)` - `/api/unlock*`
+- `send_button_press/release`, `send_machine_control`, `send_steam_speed` - входящие WS-команды от фронта
+- `push_event(event_id)` - вызывать из кода протокола, когда контроллер
+  сам прислал асинхронное событие (`event` в README). Функция уже
+  подключена к WS-рассылке через `set_event_callback` в `main.py`.
+
+## config.json / settings.json
+
+- `GET/POST /api/config` читает и целиком перезаписывает файл `config.json`
+  в `VENT_DATA_DIR` (по умолчанию `/var/lib/vent-backend/config.json`).
+  Бэкенд не валидирует структуру - что прислали, то и сохраняется,
+  что лежит в файле, то и отдаётся.
+- `GET/POST /api/settings` и `/api/update-settings` работают со
+  структурированными настройками (`settings.json`), см. `models.py`.
+  `update-settings` мержит присланные поля в уже сохранённые (partial update).
+
+## Формат WebSocket-сообщений
+
+Все сообщения (в обе стороны) обёрнуты в конверт:
+
 ```json
-"event_id": 100, // циферка ивенета
-/*
-Формат строки состояния
-abc, где 
-a - группа
-b - подгруппа
-c - параметр
-
-
-Группы (а):
-1 - Простой
-2 - Процедура
-3 - Прохолаживание
-4 - Сушка
-5 - Загрузка азота
-6 - Сервисный режим
-
-Подгруппы и параметры  (b и с) 
-0 - не выбрана (общий)
-  0 - стоп
-  1 - сон
-  2 - авария
-1 - Лебедка пациента
-  0 - стоп
-  1 - движение вверх
-  2 - движение вниз
-  3 - авария
-2 - Трубоподъемник 
-  0 - стоп
-  1 - движение вверх
-  2 - движение вниз
-  3 - авария
-3 - Парогенератор
-  0 - стоп
-  1 - включение
-  2 - работа
-  3 - остановка
-  4 - авария
-4 - Нагнетатель
-  0 - стоп
-  1 - работа
-  2 - авария
-5 - Нагреватель
-  0 - стоп
-  1 - работа
-  2 - авария
-6 - Вытяжка
-  0 - стоп
-  1 - включение
-  2 - работа
-  3 - остановка
-  4 - авария
-*/
+{ "event": "sensors_data", "payload": { ... } }
 ```
 
-REST API POST с фронта
+где `event` - одно из имён из README (`sensors_data`, `event`,
+`controller_button_pressed`, `controller_button_released`,
+`machine_controls`, `steam_speed_control`), а `payload` - соответствующий
+объект данных (без обёрточного поля `type`, оно ушло в `event` конверта).
+
+Например, нажатие кнопки от фронта на бэк:
 
 ```json
-{
-  "mode_selection": {
-    "mode": "cooling"
-  },
-  "technological_settings": {
-    "time_s1_sec": 30, // работа 
-    "time_s2_sec": 10, // ожидание
-    "time_s3_sec": 5, // общая длительность процедуры
-    "temperature_sp1": 75.0, // уставка s1
-    "temperature_sp2": 30.0 // уставка s2
-  },
-  
-  
-}
+{ "event": "controller_button_pressed", "payload": { "button": "OK" } }
 ```
 
-Ивенты подъема спуска с фронта: 
+`sensors_data` рассылается всем подключенным клиентам раз в 0.2 секунды
+фоновой задачей `sensors_broadcast_loop` (запускается при старте приложения).
 
-```json
-  "motion_commands": {
-    "patient_hoist": true, // true - вверх, false - вниз, null - стоп
-    "pipe_hoist": false // true - вверх, false - вниз, null - стоп
-  },
-```
+## Коды ответов
 
-Ивенты кнопок:
-
-```json
-"ui_buttons": {
-    "btn_ok": false, // дублирование кнопок контроллера
-    "btn_esc": false,
-    "btn_reset_fault": false,
-    "btn_bypass_confirm": false
-},
-```
-
-Ивент на разблокировку без инета:
-```json
-"security": {
-    "system_code_long": "sdfbjkhds1212367t21asd" // для разблокировки кода
-}
-```
-
-
-СЕРВИСНОЕ МЕНЮ
-
-перечисление концевиков
-ошибки
-ну и вывести всё остальное
-
-управление:
-
-разблок без инета
-кнопки контроллера
-кнопка запуска автокалибровки ()
-уставки:
-
-```json
-{
-  "mode_selection": {
-    "mode": "cooling"
-  },
-  "technological_settings": {
-    "time_s1_sec": 30, // работа 
-    "time_s2_sec": 10, // ожидание
-    "time_s3_sec": 5, // общая длительность процедуры
-    "temperature_sp1": 75.0, // уставка s1
-    "temperature_sp2": 30.0 // уставка s2
-  }
-}
-
-Уведы:
-
-Требование ручного нажатия кнопки estop, требование убедиться в надписи stdby на ПЧ (пробел - естоп)
-Требование поместить вес на платформу подъемника пациента ()
-Требование нажать на пульте все клавиши подряд (порядок высвечивается на дисплее, учитываются только правильные нажатия)
-
-
-
-управление Исполнительными устройствами:
-
-Двигатель нагнетателя - (ОИН-1, ТТР, aout1) - вкл/выкл, частота от 0 до 50
-Двигатель парогенератора VFD1.1 (GD27,075, com1.1) - вкл/выкл, частота от 0 до 50, направление (туда - сюда)
-Двигатель лебедки подъёмника пациента VFD1.2 (GD27,075, com1.2) - выкл/вверх вниз
-Двигатель трубоподъемника (VDC24, opto1 - dir, opto2 - start) - выкл/вверх вниз
-ТЭН 0.5кВт (ТТР, aout2) - вкл/выкл
-Вентилятор вытяжки 0.05кВт (triac1) - вкл/выкл
-Заслонка вытяжки (triac2) - открыть/закрыть
-Светодиодная лента - выбор цвета, вкл/выкл
+Все успешные ответы возвращают `BasicResponse { status_code: "200", message?: string }`
+с HTTP-статусом 200. Ошибки бизнес-логики (отказ контроллера выполнить
+команду и т.п.) возвращают HTTP 400 с телом `{"detail": "..."}` (стандартный
+формат FastAPI/HTTPException).
