@@ -5,7 +5,16 @@ CONFIG_PATH  - произвольный JSON, который целиком от
 SETTINGS_PATH - структурированные настройки (см. models.SettingsResponse).
 
 Оба файла лежат в директории DATA_DIR, которую можно переопределить
-переменной окружения VENT_DATA_DIR (удобно для тестов / разных сборок).
+переменной окружения VENT_DATA_DIR (удобно для тестов / разных сборок /
+прод-деплоя на мини-ПК).
+
+По умолчанию используется папка `data/` в корне проекта - она создаётся
+автоматически и не требует прав root (в отличие от системных путей вроде
+/var/lib/...). Для прод-окружения на мини-ПК можно явно задать системный
+путь, например:
+    export VENT_DATA_DIR=/var/lib/vent-backend
+(тогда убедитесь, что у пользователя, от которого запущен процесс, есть
+права на запись в эту директорию - создайте её и chown заранее).
 """
 from __future__ import annotations
 
@@ -15,7 +24,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(os.environ.get("VENT_DATA_DIR", "/var/lib/vent-backend"))
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_DATA_DIR = _PROJECT_ROOT / "data"
+
+DATA_DIR = Path(os.environ.get("VENT_DATA_DIR", str(_DEFAULT_DATA_DIR)))
 CONFIG_PATH = DATA_DIR / "config.json"
 SETTINGS_PATH = DATA_DIR / "settings.json"
 
@@ -36,7 +48,14 @@ DEFAULT_CONFIG: dict[str, Any] = {}
 
 
 def _ensure_data_dir() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Нет прав на создание/запись директории {DATA_DIR}. "
+            f"Укажите доступную папку через переменную окружения VENT_DATA_DIR "
+            f"(например: export VENT_DATA_DIR=~/vent-data)."
+        ) from exc
 
 
 def _read_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
