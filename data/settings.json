@@ -1,0 +1,14 @@
+{
+  "led_color": "#0000FF",
+  "led_active": true,
+  "blocked": "no",
+  "time_s1_sec": 20.0,
+  "time_s2_sec": 50.0,
+  "time_s3_sec": 100.0,
+  "temperature_sp1": 10.0,
+  "temperature_sp2": 20.0,
+  "wifi": {
+    "ssid": "TEST",
+    "password": "123123123"
+  }
+}

@@ -47,16 +47,16 @@ class WifiSettings(BaseModel):
     ssid: str
     # пароль во "внешний мир" не отдаём, только его длину,
     # но при обновлении настроек фронт присылает реальный пароль в этом же поле.
-    password_len: Optional[int] = None
     password: Optional[str] = Field(
         default=None,
         description="Реальный пароль, приходит только в POST /api/update-settings",
-        exclude=True,
+        exclude=False,
     )
 
 
 class SettingsUpdateRequest(BaseModel):
     led_color: Optional[str] = None
+    led_active: Optional[bool] = None
     time_s1_sec: Optional[float] = None   # работа
     time_s2_sec: Optional[float] = None   # ожидание
     time_s3_sec: Optional[float] = None   # общая длительность процедуры
@@ -70,6 +70,7 @@ BlockedState = Literal["yes", "no", "unlocking"]
 
 class SettingsResponse(BaseModel):
     led_color: str
+    led_active: bool
     blocked: BlockedState
     time_s1_sec: float
     time_s2_sec: float
