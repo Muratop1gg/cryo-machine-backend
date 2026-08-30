@@ -56,6 +56,28 @@ class ConnectionManager:
         validated = WSSensorsData.model_validate(data)
         await self.broadcast("sensors_data", validated.model_dump())
 
+    async def broadcast_zigbee_event(self, event_id: int, payload: dict):
+        """Отправить событие от Zigbee всем клиентам."""
+        message = {
+            "event": "zigbee_event",
+            "payload": {
+                "event_id": event_id,
+                "data": payload
+            }
+        }
+        async with self._lock:
+            targets = list(self._connections)
+        stale = []
+        for ws in targets:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                stale.append(ws)
+        if stale:
+            async with self._lock:
+                for ws in stale:
+                    self._connections.discard(ws)
+
     async def broadcast_event(self, event_id: int) -> None:
         await self.broadcast("event", WSEvent(event_id=event_id).model_dump())
 

@@ -56,6 +56,15 @@ async def on_startup() -> None:
     mqtt_broker = os.environ.get("MQTT_BROKER", "localhost")
     mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
     mqtt_topic = os.environ.get("MQTT_TOPIC", "zigbee2mqtt/0x7cc6b6fffeab1b60")
+
+    from app.modbus_integration import set_event_callback
+    
+    # Создаем функцию для отправки событий через WebSocket
+    async def zigbee_event_callback(event_id: int, payload: dict):
+        await manager.broadcast("zigbee_event", {"event_id": event_id, "payload": payload})
+    
+    set_event_callback(zigbee_event_callback)
+    logger.info("Zigbee event callback установлен")
     
     if not init_zigbee_mqtt(mqtt_broker, mqtt_port, mqtt_topic):
         logger.warning("Zigbee MQTT не запущен (возможно брокер недоступен)")
