@@ -1,16 +1,11 @@
 """
 FastAPI-бэкенд для панели управления вент. установкой.
-
-Запуск (dev):
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-Запуск (prod, на мини-ПК):
-    uvicorn app.main:app --host 0.0.0.0 --port 8000
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,13 +22,14 @@ from app.models import (
     SystemConfiguration,
 )
 from app.ws_manager import handle_incoming_message, manager, sensors_broadcast_loop
+from app.modbus_integration import init_zigbee_mqtt, stop_zigbee_mqtt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vent_backend")
 
 app = FastAPI(title="Vent Controller Backend")
 
-# CORS - при необходимости сузьте список origins под адрес фронта / мини-ПК
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -47,25 +43,41 @@ _background_tasks: set[asyncio.Task] = set()
 
 @app.on_event("startup")
 async def on_startup() -> None:
-    # пробрасываем событие от контроллера (push_event) в WS-рассылку
+    # Инициализация Modbus
+    plc_ip = os.environ.get("PLC_IP", "192.168.1.100")
+    plc_port = int(os.environ.get("PLC_PORT", "502"))
+    
+    if not hardware.init_hardware(plc_ip, plc_port):
+        logger.error(f"Не удалось подключиться к ПЛК {plc_ip}:{plc_port}")
+    else:
+        logger.info(f"Modbus инициализирован: {plc_ip}:{plc_port}")
+    
+    # Инициализация Zigbee (MQTT)
+    mqtt_broker = os.environ.get("MQTT_BROKER", "localhost")
+    mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
+    mqtt_topic = os.environ.get("MQTT_TOPIC", "zigbee2mqtt/0x7cc6b6fffeab1b60")
+    
+    if not init_zigbee_mqtt(mqtt_broker, mqtt_port, mqtt_topic):
+        logger.warning("Zigbee MQTT не запущен (возможно брокер недоступен)")
+    
+    # Пробрасываем событие от контроллера в WS-рассылку
     hardware.set_event_callback(manager.broadcast_event)
 
-    # цикл рассылки sensors_data раз в 0.2с
+    # Цикл рассылки sensors_data раз в 0.2с
     task = asyncio.create_task(sensors_broadcast_loop())
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
-
-    # демо-генератор событий, актуален только в MOCK-режиме hardware.py
-    if hardware.MOCK_MODE:
-        mock_task = asyncio.create_task(hardware.mock_event_generator_task())
-        _background_tasks.add(mock_task)
-        mock_task.add_done_callback(_background_tasks.discard)
 
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     for task in list(_background_tasks):
         task.cancel()
+    
+    # Остановка Zigbee
+    stop_zigbee_mqtt()
+    
+    logger.info("Сервис остановлен")
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +88,8 @@ async def on_shutdown() -> None:
 async def change_procedure_state(body: ChangeProcedureStateRequest):
     ok = await hardware.send_procedure_action(body.action)
     if not ok:
-        return _bad_request(f"Не удалось выполнить действие '{body.action}'")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Не удалось выполнить действие '{body.action}'")
     return BasicResponse(status_code="200", message=f"Процедура: {body.action}")
 
 
@@ -88,7 +101,8 @@ async def change_procedure_state(body: ChangeProcedureStateRequest):
 async def start_self_test(body: StartSelfTestRequest):
     ok = await hardware.start_self_test(body.type)
     if not ok:
-        return _bad_request("Не удалось запустить само-тест")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Не удалось запустить само-тест")
     return BasicResponse(status_code="200", message=f"Само-тест запущен: {body.type}")
 
 
@@ -96,7 +110,8 @@ async def start_self_test(body: StartSelfTestRequest):
 async def stop_self_test():
     ok = await hardware.stop_self_test()
     if not ok:
-        return _bad_request("Не удалось остановить само-тест")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Не удалось остановить само-тест")
     return BasicResponse(status_code="200", message="Само-тест остановлен")
 
 
@@ -107,26 +122,20 @@ async def stop_self_test():
 @app.post("/api/update-settings", response_model=BasicResponse)
 async def update_settings(body: SettingsUpdateRequest):
     current = await storage.read_settings()
-
     update_data = body.model_dump(exclude_none=True)
 
-    # wifi обрабатываем отдельно: сохраняем ssid + длину пароля,
-    # а сам пароль уходит в hardware-слой и не сохраняется на диск в открытом виде
     if "wifi" in update_data:
         wifi_in = update_data.pop("wifi")
         password = wifi_in.pop("password", None)
-        wifi_in["password_len"] = len(password) if password is not None else wifi_in.get(
-            "password_len", 0
-        )
+        wifi_in["password_len"] = len(password) if password is not None else wifi_in.get("password_len", 0)
         current["wifi"] = wifi_in
-        # TODO: PROTOCOL - передать реальный password в hardware.apply_settings,
-        # если нужно применить wifi-настройки сразу (сейчас он просто не сохраняется).
 
     current.update(update_data)
 
     ok = await hardware.apply_settings(current)
     if not ok:
-        return _bad_request("Не удалось применить настройки на контроллере")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Не удалось применить настройки на контроллере")
 
     await storage.write_settings(current)
     return BasicResponse(status_code="200", message="Настройки обновлены")
@@ -167,7 +176,8 @@ async def request_unlock():
     if not ok:
         settings["blocked"] = "yes"
         await storage.write_settings(settings)
-        return _bad_request("Не удалось инициировать разблокировку")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Не удалось инициировать разблокировку")
 
     return BasicResponse(status_code="200", message="Запрос на разблокировку отправлен")
 
@@ -200,16 +210,3 @@ async def websocket_endpoint(ws: WebSocket):
         logger.exception("WS error")
     finally:
         await manager.disconnect(ws)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _bad_request(message: str) -> BasicResponse:
-    # FastAPI отдаст этот объект с кодом 200, если явно не поднять HTTPException.
-    # Т.к. README требует "400 или 200" без описания тела для 400,
-    # используем HTTPException, чтобы реально вернуть код 400.
-    from fastapi import HTTPException
-
-    raise HTTPException(status_code=400, detail=message)

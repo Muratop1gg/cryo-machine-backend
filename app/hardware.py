@@ -1,230 +1,212 @@
 """
-Слой связи с вент. контроллером.
-
-Здесь НЕТ реализации самого протокола общения с контроллером - это, как
-и было оговорено, делается отдельно и подключается сюда. Все функции ниже -
-это точки интеграции: там, где помечено `# TODO: PROTOCOL`, нужно вызвать
-реальный код общения по вашему протоколу (UART/Modbus/CAN/сокет - не важно).
-
-Чтобы бэкенд можно было поднять и погонять уже сейчас (в том числе поверх
-фронта), по умолчанию включен MOCK-режим: он отдаёт правдоподобные
-рандомные данные и просто логирует команды. Отключается переменной
-окружения VENT_MOCK_HARDWARE=0.
-
-Событие `event` (WS.Event) контроллер присылает сам, асинхронно,
-без запроса от бэка. Чтобы это доставить во фронт, при получении события
-от протокола дергайте `push_event(event_id)` (см. пример в фоновой
-задаче `_mock_event_generator` ниже - в реальной реализации вместо неё
-у вас будет обработчик пришедших от контроллера данных).
+Слой связи с вент. контроллером через Modbus.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
-import random
-import time
-from typing import Awaitable, Callable, Optional
+from typing import Optional, Callable, Awaitable
+
+from app import modbus_integration
 
 logger = logging.getLogger("vent_backend.hardware")
 
-MOCK_MODE = os.environ.get("VENT_MOCK_HARDWARE", "1") != "0"
 
-EventCallback = Callable[[int], Awaitable[None]]
-_event_callback: Optional[EventCallback] = None
-
-
-def set_event_callback(callback: EventCallback) -> None:
-    """Вызывается один раз при старте приложения (main.py), чтобы hardware-слой
-    знал, куда пробрасывать события `event_id`, пришедшие от контроллера
-    вне ответа на запрос (см. WS.Event в README)."""
-    global _event_callback
-    _event_callback = callback
+# =====================================================================
+# ИНИЦИАЛИЗАЦИЯ MODBUS
+# =====================================================================
+def init_hardware(plc_ip: str = "192.168.1.100", plc_port: int = 502) -> bool:
+    """Инициализировать Modbus-соединение."""
+    return modbus_integration.init_modbus(plc_ip, plc_port)
 
 
-async def push_event(event_id: int) -> None:
-    """Вызывать из кода протокола, когда контроллер прислал событие."""
-    if _event_callback is not None:
-        await _event_callback(event_id)
-    else:
-        logger.warning("push_event(%s) called before set_event_callback()", event_id)
-
-
-# ---------------------------------------------------------------------------
-# Периодические данные датчиков (sensors_data, раз в 0.2с)
-# ---------------------------------------------------------------------------
-
+# =====================================================================
+# Периодические данные датчиков
+# =====================================================================
 async def get_sensors_data() -> dict:
-    """Возвращает данные для WS-сообщения sensors_data.
+    """Возвращает данные для WS-сообщения sensors_data."""
+    try:
+        return await modbus_integration.read_plc_sensors_data()
+    except Exception as e:
+        logger.error(f"Ошибка чтения данных с ПЛК: {e}")
+        # Возвращаем пустую структуру, но без моков
+        return {
+            "digital_inputs": {
+                "pipe_hoist": {
+                    "lsw_top_emergency": False,
+                    "lsw_top_working": False,
+                    "lsw_bottom_working": False,
+                    "lsw_bottom_emergency": False,
+                },
+                "patient_hoist": {
+                    "lsw_top_emergency": False,
+                    "lsw_top_working": False,
+                    "lsw_bottom_working": False,
+                    "lsw_bottom_emergency": False,
+                    "patient_present": False,
+                },
+                "safety": {
+                    "estop_pressed": False,
+                    "cabinet_door_open": False,
+                },
+            },
+            "stats": {
+                "patient_hoist": 0,
+                "pipe_hoist": 0,
+                "steam": 0,
+                "charger": 0,
+                "heater": 0,
+                "exhaust": 0,
+            },
+            "sensor_data": {
+                "t1": 0.0,
+                "t2": 0.0,
+                "t3": 0.0,
+                "t4": 0.0,
+                "humidity": 0.0,
+                "oxygen": 0.0,
+                "nitrogen_mass": None,
+            },
+            "diagnostics": {
+                "test": {
+                    "running": False,
+                    "type": None,
+                    "stage": None,
+                }
+            },
+        }
 
-    TODO: PROTOCOL - заменить на реальное чтение состояния с контроллера.
+
+# =====================================================================
+# WS КОМАНДЫ ОТ ФРОНТА
+# =====================================================================
+async def handle_ws_command(event: str, payload: dict) -> bool:
     """
-    if MOCK_MODE:
-        return _mock_sensors_data()
-
-    raise NotImplementedError(
-        "get_sensors_data(): подключите реальный протокол общения с контроллером"
-    )
+    Обработать команду от WebSocket.
+    Используется в ws_manager.py.
+    """
+    return await modbus_integration.handle_web_socket_command(event, payload)
 
 
-def _mock_sensors_data() -> dict:
-    return {
-        "digital_inputs": {
-            "pipe_hoist": {
-                "lsw_top_emergency": False,
-                "lsw_top_working": False,
-                "lsw_bottom_working": True,
-                "lsw_bottom_emergency": False,
-            },
-            "patient_hoist": {
-                "lsw_top_emergency": False,
-                "lsw_top_working": False,
-                "lsw_bottom_working": True,
-                "lsw_bottom_emergency": False,
-                "patient_present": False,
-            },
-            "safety": {
-                "estop_pressed": False,
-                "cabinet_door_open": False,
-            },
-        },
-        "stats": {
-            "patient_hoist": 0,
-            "pipe_hoist": 0,
-            "steam": 0,
-            "charger": 0,
-            "heater": 0,
-            "exhaust": 0,
-        },
-        "sensor_data": {
-            "t1": round(20 + random.random() * 2, 2),
-            "t2": round(20 + random.random() * 2, 2),
-            "t3": round(20 + random.random() * 2, 2),
-            "t4": round(20 + random.random() * 2, 2),
-            "humidity": round(40 + random.random() * 5, 2),
-            "oxygen": round(20.9 + random.random() * 0.1, 2),
-            "nitrogen_mass": None,
-        },
-        "diagnostics": {
-            "test": {
-                "running": False,
-                "type": None,
-                "stage": None,
-            }
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# /api/change-procedure-state/
-# ---------------------------------------------------------------------------
-
+# =====================================================================
+# ПРОЧИЕ КОМАНДЫ
+# =====================================================================
 async def send_procedure_action(action: str) -> bool:
-    """TODO: PROTOCOL - отправить команду старт/стоп/пауза/резюм контроллеру."""
-    logger.info("send_procedure_action(%s)", action)
-    if MOCK_MODE:
-        return True
-    raise NotImplementedError
+    """Отправить команду старт/стоп/пауза/резюм."""
+    command_map = {
+        "start": "procedure_start",
+        "stop": "procedure_stop",
+        "pause": "procedure_stop",
+        "resume": "procedure_start",
+    }
+    command = command_map.get(action)
+    if command:
+        return await modbus_integration.handle_web_socket_command(command, {})
+    return False
 
-
-# ---------------------------------------------------------------------------
-# /api/self-test/
-# ---------------------------------------------------------------------------
 
 async def start_self_test(test_type: str) -> bool:
-    """TODO: PROTOCOL - запустить само-тест на контроллере."""
-    logger.info("start_self_test(%s)", test_type)
-    if MOCK_MODE:
-        return True
-    raise NotImplementedError
+    """Запустить само-тест."""
+    logger.info(f"start_self_test({test_type})")
+    # TODO: добавить Modbus команды для само-теста
+    return False
 
 
 async def stop_self_test() -> bool:
-    """TODO: PROTOCOL - остановить само-тест на контроллере."""
+    """Остановить само-тест."""
     logger.info("stop_self_test()")
-    if MOCK_MODE:
-        return True
-    raise NotImplementedError
+    # TODO: добавить Modbus команды для само-теста
+    return False
 
-
-# ---------------------------------------------------------------------------
-# /api/update-settings
-# ---------------------------------------------------------------------------
 
 async def apply_settings(settings: dict) -> bool:
-    """TODO: PROTOCOL - применить настройки (уставки температур, тайминги,
-    цвет LED, wifi) на контроллере/устройстве."""
-    logger.info("apply_settings(%s)", {k: v for k, v in settings.items() if k != "wifi"})
-    if MOCK_MODE:
-        return True
-    raise NotImplementedError
+    """Применить настройки на контроллере."""
+    logger.info(f"apply_settings({settings})")
+    
+    # Запись уставок в Modbus
+    manager = modbus_integration.get_modbus_manager()
+    config = modbus_integration.MODBUS_CONFIG["registers"]
+    success = True
+    
+    if "temperature_sp1" in settings:
+        success &= manager.write_register(config["temperature_sp1"], int(settings["temperature_sp1"] * 10))
+    if "temperature_sp2" in settings:
+        success &= manager.write_register(config["temperature_sp2"], int(settings["temperature_sp2"] * 10))
+    if "time_s1_sec" in settings:
+        success &= manager.write_register(config["time_s1"], int(settings["time_s1_sec"]))
+    if "time_s2_sec" in settings:
+        success &= manager.write_register(config["time_s2"], int(settings["time_s2_sec"]))
+    if "time_s3_sec" in settings:
+        success &= manager.write_register(config["time_s3"], int(settings["time_s3_sec"]))
+    
+    # Применение цвета LED (если есть)
+    if "led_color" in settings:
+        # TODO: добавить Modbus команду для LED
+        pass
+    
+    return success
 
-
-# ---------------------------------------------------------------------------
-# /api/unlock, /api/unlock/check
-# ---------------------------------------------------------------------------
 
 async def request_unlock() -> bool:
-    """Инициирует процедуру разблокировки (например, контроллер должен
-    подготовить/показать сид для генерации кода, привязанный ко времени).
-
-    TODO: PROTOCOL - реализовать реальный запрос к контроллеру.
-    """
+    """Инициировать разблокировку."""
     logger.info("request_unlock()")
-    if MOCK_MODE:
-        return True
-    raise NotImplementedError
+    # TODO: реализовать Modbus команду для разблокировки
+    return False
 
 
 async def check_unlock_code(code: str) -> tuple[bool, int]:
-    """Проверяет код разблокировки, возвращает (accepted, days_left).
+    """Проверить код разблокировки."""
+    logger.info(f"check_unlock_code({code})")
+    # TODO: реализовать проверку кода через Modbus
+    return False, 0
 
-    TODO: PROTOCOL - код содержит информацию о времени (согласно README),
-    реальная проверка/расшифровка кода должна быть тут.
-    """
-    logger.info("check_unlock_code(%s)", code)
-    if MOCK_MODE:
-        # заглушка: код принимается, если он не пустой и состоит из цифр
-        accepted = code.isdigit() and len(code) >= 4
-        days_left = 30 if accepted else 0
-        return accepted, days_left
-    raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# Управляющие WS-команды от фронта (machine_controls, steam_speed_control,
-# controller_button_pressed/released)
-# ---------------------------------------------------------------------------
 
 async def send_button_press(button: str) -> None:
-    """TODO: PROTOCOL - сообщить контроллеру о нажатии кнопки на пульте."""
-    logger.info("send_button_press(%s)", button)
+    """Нажатие кнопки на пульте."""
+    logger.info(f"send_button_press({button})")
+    # TODO: Modbus команда для кнопки
 
 
 async def send_button_release() -> None:
-    """TODO: PROTOCOL - сообщить контроллеру об отпускании кнопки."""
+    """Отпускание кнопки."""
     logger.info("send_button_release()")
+    # TODO: Modbus команда для отпускания
 
 
 async def send_machine_control(control_type: str, value: bool) -> None:
-    """TODO: PROTOCOL - включить/выключить конкретный узел машины."""
-    logger.info("send_machine_control(%s, %s)", control_type, value)
+    """Управление узлом машины."""
+    logger.info(f"send_machine_control({control_type}, {value})")
+    await modbus_integration.handle_web_socket_command(
+        "machine_controls", 
+        {"control_type": control_type, "value": value}
+    )
 
 
 async def send_steam_speed(value: int) -> None:
-    """TODO: PROTOCOL - установить скорость подачи пара (0..50)."""
-    logger.info("send_steam_speed(%s)", value)
+    """Установить скорость пара."""
+    logger.info(f"send_steam_speed({value})")
+    manager = modbus_integration.get_modbus_manager()
+    address = modbus_integration.MODBUS_CONFIG["registers"]["steam_speed"]
+    manager.write_register(address, value)
 
 
-# ---------------------------------------------------------------------------
-# Демонстрационный генератор случайных событий - ТОЛЬКО для MOCK_MODE.
-# В реальной реализации эту функцию не запускать: события должны приходить
-# из кода протокола общения с контроллером (там же, где вызывается push_event).
-# ---------------------------------------------------------------------------
+# =====================================================================
+# Event Callback
+# =====================================================================
+EventCallback = Callable[[int], Awaitable[None]]
+_event_callback: Optional[EventCallback] = None
 
-async def mock_event_generator_task() -> None:
-    if not MOCK_MODE:
-        return
-    while True:
-        await asyncio.sleep(30)
-        await push_event(int(time.time()) % 1000)
+def set_event_callback(callback: EventCallback) -> None:
+    """Установить callback для обработки событий от контроллера."""
+    global _event_callback
+    _event_callback = callback
+    logger.info("Event callback установлен")
+
+async def push_event(event_id: int) -> None:
+    """Вызвать callback с событием от контроллера."""
+    if _event_callback is not None:
+        try:
+            await _event_callback(event_id)
+        except Exception as e:
+            logger.error(f"Ошибка при вызове event callback: {e}")
+    else:
+        logger.warning(f"push_event({event_id}) вызван, но callback не установлен")

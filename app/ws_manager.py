@@ -1,12 +1,5 @@
 """
-Менеджер WS-подключений.
-
-Формат сообщений в обе стороны - конверт:
-    {"event": "<имя>", "payload": {...}}
-
-где "<имя>" совпадает с названиями из README (`sensors_data`, `event`,
-`controller_button_pressed`, `controller_button_released`,
-`machine_controls`, `steam_speed_control`).
+Обновленный менеджер WS-подключений с интеграцией Modbus.
 """
 from __future__ import annotations
 
@@ -60,8 +53,6 @@ class ConnectionManager:
                     self._connections.discard(ws)
 
     async def broadcast_sensors_data(self, data: dict) -> None:
-        # валидация формы данных перед отправкой (сгорит рано, если протокол
-        # начнёт присылать не то, что описано в README)
         validated = WSSensorsData.model_validate(data)
         await self.broadcast("sensors_data", validated.model_dump())
 
@@ -73,8 +64,7 @@ manager = ConnectionManager()
 
 
 async def sensors_broadcast_loop() -> None:
-    """Раз в 0.2с забирает данные датчиков и рассылает их всем подключенным
-    клиентам, как указано в задаче (`asyncio.sleep(0.2)`)."""
+    """Раз в 0.2с забирает данные датчиков и рассылает их всем подключенным клиентам."""
     while True:
         try:
             data = await hardware.get_sensors_data()
@@ -85,29 +75,44 @@ async def sensors_broadcast_loop() -> None:
 
 
 async def handle_incoming_message(raw: dict) -> None:
-    """Разбирает конверт {"event": ..., "payload": ...}, пришедший от фронта,
-    и вызывает соответствующую команду в hardware.py."""
+    """
+    Разбирает конверт {"event": ..., "payload": ...}, пришедший от фронта,
+    и вызывает соответствующую команду.
+    """
     event = raw.get("event")
     payload = raw.get("payload") or {}
 
     try:
-        if event == "controller_button_pressed":
-            data = WSControllerButtonPressed.model_validate(payload)
-            await hardware.send_button_press(data.button)
-
-        elif event == "controller_button_released":
-            await hardware.send_button_release()
-
-        elif event == "machine_controls":
+        # Обработка команд управления через Modbus
+        if event == "machine_controls":
             data = WSMachineControl.model_validate(payload)
             await hardware.send_machine_control(data.control_type, data.value)
-
+        
         elif event == "steam_speed_control":
             data = WSSteamSpeedControl.model_validate(payload)
             await hardware.send_steam_speed(data.value)
-
+        
+        elif event == "controller_button_pressed":
+            data = WSControllerButtonPressed.model_validate(payload)
+            await hardware.send_button_press(data.button)
+        
+        elif event == "controller_button_released":
+            await hardware.send_button_release()
+        
+        # Новые команды для сушки/процедуры/прохлаживания
+        elif event in ["dry_start", "dry_stop", "procedure_start", "procedure_stop",
+                       "cooling_start", "cooling_stop", "hoist_up", "hoist_down",
+                       "pipe_hoist_up", "pipe_hoist_down"]:
+            success = await hardware.handle_ws_command(event, payload)
+            if success:
+                logger.info(f"Команда {event} выполнена успешно")
+            else:
+                logger.error(f"Ошибка выполнения команды {event}")
+        
         else:
             logger.warning("Unknown incoming WS event: %r", event)
 
-    except ValidationError:
-        logger.warning("Invalid payload for WS event %r: %r", event, payload)
+    except ValidationError as e:
+        logger.warning(f"Invalid payload for WS event {event!r}: {e}")
+    except Exception as e:
+        logger.exception(f"Ошибка обработки WS события {event}: {e}")

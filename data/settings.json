@@ -1,6 +1,6 @@
 {
   "led_color": "#0000FF",
-  "led_active": true,
+  "led_active": false,
   "blocked": "no",
   "time_s1_sec": 20.0,
   "time_s2_sec": 50.0,
