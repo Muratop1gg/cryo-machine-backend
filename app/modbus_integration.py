@@ -1755,7 +1755,7 @@ def init_zigbee_mqtt(
 
         logger.error(
             f"Не удалось подключить "
-            f"Zigbee MQTT: {e}",
+            f"Zigbee MQTT. 1758 строка",
             exc_info=True,
         )
 
