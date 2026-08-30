@@ -19,16 +19,16 @@ logger = logging.getLogger("vent_backend.modbus")
 MODBUS_CONFIG = {
     # Адреса катушек (Coils) - для включения/выключения
     "coils": {
-        "dry_start": 800,           # Старт сушки
-        "dry_stop": 801,            # Стоп сушки
-        "procedure_start": 802,     # Старт процедуры
-        "procedure_stop": 803,      # Стоп процедуры
+        "dry_start": 0,           # Старт сушки
+        "dry_stop": 1,            # Стоп сушки
+        "procedure_start": 2,     # Старт процедуры
+        "procedure_stop": 3,      # Стоп процедуры
         "cooling_start": 804,       # Старт прохлаживания
         "cooling_stop": 805,        # Стоп прохлаживания
-        "hoist_up": 806,            # Лебёдка вверх
-        "hoist_down": 807,          # Лебёдка вниз
-        "pipe_hoist_up": 808,       # Трубоподъемник вверх
-        "pipe_hoist_down": 809,     # Трубоподъемник вниз
+        "hoist_up": 4,            # Лебёдка вверх
+        "hoist_down": 5,          # Лебёдка вниз
+        "pipe_hoist_up": 6,       # Трубоподъемник вверх
+        "pipe_hoist_down": 7,     # Трубоподъемник вниз
         "buzzer": 810,              # Буззер
     },
     # Адреса регистров хранения (Holding Registers) - для числовых значений
@@ -38,13 +38,13 @@ MODBUS_CONFIG = {
         "temperature_sp2": 102,     # Уставка температуры S2
         "time_s1": 103,             # Время работы S1
         "time_s2": 104,             # Время ожидания S2
-        "time_s3": 105,             # Общая длительность процедуры
+        "time_s3": 0,             # Общая длительность процедуры
     },
     # Адреса входных регистров (Input Registers) - для чтения данных
     "input_registers": {
-        "t1": 300,
-        "t2": 301,
-        "t3": 302,
+        "t1": 0,
+        "t2": 2,
+        "t3": 4,
         "t4": 303,
         "humidity": 304,
         "oxygen": 305,
