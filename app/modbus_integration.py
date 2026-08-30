@@ -398,37 +398,82 @@ def _read_status_register(offset: int) -> int:
 # ИНИЦИАЛИЗАЦИЯ ZIGBEE (MQTT)
 # =====================================================================
 _zigbee_client: Optional[mqtt.Client] = None
+_zigbee_connected = False
 
 def init_zigbee_mqtt(broker: str = "localhost", port: int = 1883, 
                      topic: str = "zigbee2mqtt/0x7cc6b6fffeab1b60") -> bool:
     """Инициализировать MQTT-клиент для Zigbee."""
-    global _zigbee_client
+    global _zigbee_client, _zigbee_connected
     
     def on_connect(client, userdata, flags, rc):
+        global _zigbee_connected
         if rc == 0:
-            logger.info("Zigbee MQTT подключен к брокеру")
+            _zigbee_connected = True
+            logger.info(f"Zigbee MQTT подключен к брокеру {broker}:{port}")
             client.subscribe(topic)
+            logger.info(f"Zigbee подписан на топик: {topic}")
         else:
+            _zigbee_connected = False
             logger.error(f"Zigbee MQTT ошибка подключения: {rc}")
+    
+    def on_disconnect(client, userdata, rc):
+        global _zigbee_connected
+        _zigbee_connected = False
+        logger.warning("Zigbee MQTT отключен от брокера")
     
     def on_message(client, userdata, msg):
         try:
-            payload = json.loads(msg.payload.decode())
+            # Парсим JSON
+            payload_str = msg.payload.decode()
+            logger.debug(f"Zigbee получено сообщение: {payload_str}")
+            payload = json.loads(payload_str)
+            
+            # Получаем action из payload
             action = payload.get("action")
+            
             if action:
-                logger.info(f"Zigbee получена команда: {action}")
-                handle_zigbee_command(action)
+                logger.info(f"Zigbee получена команда: {action} (payload: {payload})")
+                # Вызываем обработчик Zigbee команд
+                success = handle_zigbee_command(action)
+                if success:
+                    logger.info(f"Zigbee команда {action} успешно выполнена")
+                else:
+                    logger.error(f"Zigbee команда {action} не выполнена")
+            else:
+                logger.debug(f"Zigbee сообщение без action: {payload}")
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"Zigbee ошибка парсинга JSON: {e}, данные: {msg.payload}")
         except Exception as e:
             logger.error(f"Zigbee ошибка обработки: {e}")
     
     try:
-        _zigbee_client = mqtt.Client()
+        # Создаем клиент с явным указанием protocol version
+        _zigbee_client = mqtt.Client(protocol=mqtt.MQTTv311)
         _zigbee_client.on_connect = on_connect
+        _zigbee_client.on_disconnect = on_disconnect
         _zigbee_client.on_message = on_message
-        _zigbee_client.connect(broker, port, 60)
+        
+        # Устанавливаем таймауты
+        _zigbee_client.connect(broker, port, keepalive=60)
+        
+        # Запускаем цикл в отдельном потоке
         _zigbee_client.loop_start()
-        logger.info(f"Zigbee MQTT запущен: {broker}:{port}, топик: {topic}")
-        return True
+        
+        # Ждем подключения (максимум 5 секунд)
+        import time
+        for _ in range(50):
+            if _zigbee_connected:
+                break
+            time.sleep(0.1)
+        
+        if _zigbee_connected:
+            logger.info(f"Zigbee MQTT успешно запущен: {broker}:{port}, топик: {topic}")
+            return True
+        else:
+            logger.warning("Zigbee MQTT подключился, но не получил подтверждение")
+            return True  # Все равно возвращаем True, т.к. клиент запущен
+            
     except Exception as e:
         logger.error(f"Не удалось подключить Zigbee MQTT: {e}")
         return False
@@ -436,9 +481,15 @@ def init_zigbee_mqtt(broker: str = "localhost", port: int = 1883,
 
 def stop_zigbee_mqtt():
     """Остановить Zigbee MQTT клиент."""
-    global _zigbee_client
+    global _zigbee_client, _zigbee_connected
     if _zigbee_client:
         _zigbee_client.loop_stop()
         _zigbee_client.disconnect()
         _zigbee_client = None
+        _zigbee_connected = False
         logger.info("Zigbee MQTT остановлен")
+
+
+def is_zigbee_connected() -> bool:
+    """Проверить состояние подключения Zigbee."""
+    return _zigbee_connected
