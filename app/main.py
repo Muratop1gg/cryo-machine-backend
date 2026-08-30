@@ -44,7 +44,7 @@ _background_tasks: set[asyncio.Task] = set()
 @app.on_event("startup")
 async def on_startup() -> None:
     # Инициализация Modbus
-    plc_ip = os.environ.get("PLC_IP", "192.168.1.100")
+    plc_ip = os.environ.get("PLC_IP", "192.168.0.100")
     plc_port = int(os.environ.get("PLC_PORT", "502"))
     
     if not hardware.init_hardware(plc_ip, plc_port):

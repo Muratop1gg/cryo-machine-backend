@@ -72,7 +72,7 @@ MODBUS_CONFIG = {
 class ModbusManager:
     """Менеджер Modbus-соединений."""
     
-    def __init__(self, host: str = "192.168.1.100", port: int = 502):
+    def __init__(self, host: str = "192.168.0.100", port: int = 502):
         self.host = host
         self.port = port
         self.client = ModbusClient(host=host, port=port, auto_open=True, auto_close=True)
@@ -175,7 +175,7 @@ class ModbusManager:
 # =====================================================================
 _modbus_manager: Optional[ModbusManager] = None
 
-def init_modbus(host: str = "192.168.1.100", port: int = 502) -> bool:
+def init_modbus(host: str = "192.168.0.100", port: int = 502) -> bool:
     """Инициализировать Modbus-менеджер."""
     global _modbus_manager
     _modbus_manager = ModbusManager(host, port)
@@ -191,44 +191,14 @@ def get_modbus_manager() -> ModbusManager:
 # =====================================================================
 # ОБРАБОТЧИКИ КОМАНД
 # =====================================================================
-def _execute_coil_command(command_name: str, value: bool = True) -> bool:
-    """Выполнить команду для катушки (включить/выключить)."""
-    config = MODBUS_CONFIG["coils"]
-    if command_name not in config:
-        logger.error(f"Неизвестная команда: {command_name}")
-        return False
-    
-    address = config[command_name]
-    manager = get_modbus_manager()
-    return manager.write_coil(address, value)
 
-
-def handle_zigbee_command(action: str) -> bool:
-    """
-    Обработать команду от Zigbee пульта.
-    
-    Args:
-        action: Действие с пульта (on, off, brightness_step_up, brightness_step_down)
-    
-    Returns:
-        True если команда выполнена успешно
-    """
-    # Маппинг Zigbee действий на команды Modbus
-    zigbee_map = {
-        "on": ("procedure_start", True),
-        "off": ("procedure_stop", False),
-        "brightness_step_up": ("hoist_up", True),
-        "brightness_step_down": ("hoist_down", False),
-    }
-    
-    if action in zigbee_map:
-        command, value = zigbee_map[action]
-        logger.info(f"Zigbee команда: {action} -> {command}")
-        return _execute_coil_command(command, value)
-    else:
-        logger.warning(f"Неизвестное Zigbee действие: {action}")
-        return False
-
+# Хранилище состояний для триггерных кнопок
+_trigger_states = {
+    "hoist_up": False,
+    "hoist_down": False,
+    "pipe_hoist_up": False,
+    "pipe_hoist_down": False,
+}
 
 async def handle_web_socket_command(event: str, payload: dict) -> bool:
     """
@@ -284,6 +254,99 @@ async def handle_web_socket_command(event: str, payload: dict) -> bool:
     
     logger.warning(f"Неизвестное WS событие: {event}")
     return False
+
+def _execute_coil_command(command_name: str, value: bool = True) -> bool:
+    """Выполнить команду для катушки (включить/выключить)."""
+    config = MODBUS_CONFIG["coils"]
+    if command_name not in config:
+        logger.error(f"Неизвестная команда: {command_name}")
+        return False
+    
+    address = config[command_name]
+    manager = get_modbus_manager()
+    return manager.write_coil(address, value)
+
+
+def _toggle_trigger_command(command_name: str) -> bool:
+    """
+    Выполнить команду как триггер - переключить состояние.
+    Возвращает новое состояние.
+    """
+    global _trigger_states
+    
+    # Инвертируем состояние
+    current_state = _trigger_states.get(command_name, False)
+    new_state = not current_state
+    _trigger_states[command_name] = new_state
+    
+    logger.info(f"Триггер {command_name}: {current_state} -> {new_state}")
+    
+    # Отправляем новое состояние в Modbus
+    success = _execute_coil_command(command_name, new_state)
+    
+    # Если не удалось отправить, возвращаем состояние обратно
+    if not success:
+        _trigger_states[command_name] = current_state
+        logger.error(f"Не удалось отправить триггер {command_name}")
+    
+    return success
+
+
+def handle_zigbee_command(action: str) -> bool:
+    """
+    Обработать команду от Zigbee пульта.
+    
+    Args:
+        action: Действие с пульта (on, off, brightness_step_up, brightness_step_down)
+    
+    Returns:
+        True если команда выполнена успешно
+    """
+    # Маппинг Zigbee действий на команды Modbus
+    # Для кнопок с триггерным режимом
+    zigbee_trigger_map = {
+        "brightness_step_up": "hoist_up",
+        "brightness_step_down": "hoist_down",
+        "color_temperature_step_down": "pipe_hoist_up",
+        "color_temperature_step_up": "pipe_hoist_down",
+    }
+    
+    # Для кнопок с обычным режимом (on/off)
+    zigbee_normal_map = {
+        "on": ("procedure_start", True),
+        "off": ("procedure_stop", False),
+    }
+    
+    if action in zigbee_normal_map:
+        command, value = zigbee_normal_map[action]
+        logger.info(f"Zigbee команда: {action} -> {command} = {value}")
+        return _execute_coil_command(command, value)
+    
+    elif action in zigbee_trigger_map:
+        command = zigbee_trigger_map[action]
+        logger.info(f"Zigbee триггер: {action} -> {command}")
+        return _toggle_trigger_command(command)
+    
+    else:
+        logger.warning(f"Неизвестное Zigbee действие: {action}")
+        return False
+
+
+def reset_trigger_states():
+    """
+    Сбросить все триггерные состояния в False.
+    Можно вызывать при старте или по необходимости.
+    """
+    global _trigger_states
+    for command in _trigger_states:
+        _trigger_states[command] = False
+        _execute_coil_command(command, False)
+    logger.info("Триггерные состояния сброшены")
+
+
+def get_trigger_state(command_name: str) -> bool:
+    """Получить текущее состояние триггера."""
+    return _trigger_states.get(command_name, False)
 
 
 # =====================================================================
@@ -405,6 +468,9 @@ def init_zigbee_mqtt(broker: str = "localhost", port: int = 1883,
     """Инициализировать MQTT-клиент для Zigbee."""
     global _zigbee_client, _zigbee_connected
     
+    # Сброс триггерных состояний при старте
+    reset_trigger_states()
+    
     def on_connect(client, userdata, flags, rc):
         global _zigbee_connected
         if rc == 0:
@@ -430,6 +496,11 @@ def init_zigbee_mqtt(broker: str = "localhost", port: int = 1883,
             
             # Получаем action из payload
             action = payload.get("action")
+            
+            # Также проверяем другие возможные поля
+            if not action:
+                # Для некоторых устройств может быть поле "click" или "button"
+                action = payload.get("click") or payload.get("button")
             
             if action:
                 logger.info(f"Zigbee получена команда: {action} (payload: {payload})")

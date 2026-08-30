@@ -14,7 +14,7 @@ logger = logging.getLogger("vent_backend.hardware")
 # =====================================================================
 # ИНИЦИАЛИЗАЦИЯ MODBUS
 # =====================================================================
-def init_hardware(plc_ip: str = "192.168.1.100", plc_port: int = 502) -> bool:
+def init_hardware(plc_ip: str = "192.168.0.100", plc_port: int = 502) -> bool:
     """Инициализировать Modbus-соединение."""
     return modbus_integration.init_modbus(plc_ip, plc_port)
 
