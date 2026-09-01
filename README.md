@@ -1,9 +1,11 @@
 Тебе после клона репо надо:
 
 1. `python -m venv venv`
-2. `./venv/bin/activate.sh1` я так понимаю на винде
-3. `pip install -r "requirements.txt"`
-4. Создать .env в папке app и записать в него:
+2. `source ./venv/bin/activate`
+
+   На Windows: `./venv/Scripts/Activate.ps1`
+4. `pip install -r "requirements.txt"`
+5. Создать .env в папке app и записать в него:
 ```
 # Modbus настройки
 PLC_IP=192.168.0.100
