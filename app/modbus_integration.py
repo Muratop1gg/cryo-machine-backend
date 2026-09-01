@@ -101,7 +101,67 @@ MODBUS_CONFIG = {
 EventCallback = Callable[[int, dict], Awaitable[None]]
 
 _event_callback: Optional[EventCallback] = None
+_asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
 
+def set_asyncio_loop(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """
+    Сохранить основной asyncio event loop.
+
+    MQTT работает в отдельном потоке, поэтому
+    asyncio.get_running_loop() внутри MQTT callback
+    использовать нельзя.
+    """
+    global _asyncio_loop
+
+    _asyncio_loop = loop
+
+    logger.info(
+        "Основной asyncio event loop зарегистрирован"
+    )
+
+def _schedule_front_event(
+    event_id: int,
+    payload: dict,
+) -> None:
+    """
+    Безопасно отправить событие во фронт.
+
+    Может вызываться как из asyncio-потока,
+    так и из MQTT-потока.
+    """
+
+    global _asyncio_loop
+
+    if _asyncio_loop is None:
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop не зарегистрирован"
+        )
+        return
+
+    if _asyncio_loop.is_closed():
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop закрыт"
+        )
+        return
+
+    try:
+        asyncio.run_coroutine_threadsafe(
+            send_event_to_front(
+                event_id,
+                payload,
+            ),
+            _asyncio_loop,
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Ошибка постановки события во фронт: {e}",
+            exc_info=True,
+        )
 
 def set_event_callback(callback: EventCallback) -> None:
     """
@@ -1334,7 +1394,7 @@ async def read_plc_sensors_data() -> dict:
     t3 = await _read_scaled_input_register(
         inputs["t3"]
     )
-
+    print(t1,t2,t3)
     t4 = await _read_scaled_input_register(
         inputs["t4"]
     )
@@ -1669,22 +1729,60 @@ def init_zigbee_mqtt(
             # Передаём обработку в asyncio.
             # -----------------------------------------------------
 
+            global _asyncio_loop
+
+            if _asyncio_loop is None:
+                logger.error(
+                    "Не удалось обработать Zigbee команду: "
+                    "asyncio loop не зарегистрирован"
+                )
+                return
+
+            if _asyncio_loop.is_closed():
+                logger.error(
+                    "Не удалось обработать Zigbee команду: "
+                    "asyncio loop закрыт"
+                )
+                return
+
             try:
-
-                loop = asyncio.get_running_loop()
-
-                loop.create_task(
+                future = asyncio.run_coroutine_threadsafe(
                     handle_zigbee_command(
                         action,
                         payload,
-                    )
+                    ),
+                    _asyncio_loop,
                 )
 
-            except RuntimeError:
+                def on_command_done(f):
+                    try:
+                        result = f.result()
 
+                        if result:
+                            logger.info(
+                                f"Zigbee команда {action} "
+                                f"успешно выполнена"
+                            )
+                        else:
+                            logger.error(
+                                f"Zigbee команда {action} "
+                                f"НЕ выполнена"
+                            )
+
+                    except Exception as e:
+                        logger.error(
+                            f"Ошибка выполнения Zigbee команды "
+                            f"{action}: {e}",
+                            exc_info=True,
+                        )
+
+                future.add_done_callback(on_command_done)
+
+            except Exception as e:
                 logger.error(
-                    "Не удалось обработать Zigbee "
-                    "команду: нет активного asyncio loop"
+                    f"Ошибка передачи Zigbee команды "
+                    f"в asyncio: {e}",
+                    exc_info=True,
                 )
 
         except json.JSONDecodeError as e:
