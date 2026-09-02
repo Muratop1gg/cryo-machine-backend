@@ -72,7 +72,7 @@ MODBUS_CONFIG = {
         "humidity": 304,
         "oxygen": 305,
         "nitrogen_mass": 306,
-        "event": 307,  # НОВЫЙ РЕГИСТР СОБЫТИЙ
+        "event": 3,  # НОВЫЙ РЕГИСТР СОБЫТИЙ
     },
 
     # Адреса дискретных входов (Discrete Inputs)
@@ -100,8 +100,10 @@ MODBUS_CONFIG = {
 # =====================================================================
 
 EventCallback = Callable[[int, dict], Awaitable[None]]
+PLCEventCallback = Callable[[int],  Awaitable[None]]
 
 _event_callback: Optional[EventCallback] = None
+_plc_event_callback: Optional[PLCEventCallback] = None 
 _asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
 _previous_event_value: Optional[int] = None
 _event_initialized = False
@@ -123,6 +125,39 @@ def set_asyncio_loop(
     logger.info(
         "Основной asyncio event loop зарегистрирован"
     )
+
+def _schedule_plc_event (
+    event_id: payload
+) -> None:
+    global _asyncio_loop
+
+    if _asyncio_loop is None:
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop не зарегистрирован"
+        )
+        return
+
+    if _asyncio_loop.is_closed():
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop закрыт"
+        )
+        return
+
+    try:
+        asyncio.run_coroutine_threadsafe(
+            send_plc_event_to_front(
+                event_id
+            ),
+            _asyncio_loop,
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Ошибка постановки события во фронт: {e}",
+            exc_info=True,
+        )
 
 def _schedule_front_event(
     event_id: int,
@@ -176,6 +211,35 @@ def set_event_callback(callback: EventCallback) -> None:
 
     logger.info("Event callback для фронта установлен")
 
+def set_plc_event_callback(callback: EventCallback) -> None:
+    """
+    Установить callback для отправки событий во фронт.
+    """
+    global _plc_event_callback
+
+    _plc_event_callback = callback
+
+    logger.info("Event callback для фронта установлен")
+
+async def send_plc_event_to_front(
+    event_id: int
+) -> None:
+    if _plc_event_callback is None:
+        logger.warning(
+            f"Event callback не установлен, "
+            f"событие {event_id} не отправлено"
+        )
+        return
+
+    try:
+        await _plc_event_callback(
+            event_id
+        )
+    except Exception as e:
+        logger.error(
+            f"Ошибка при отправке события во фронт: {e}",
+            exc_info=True,
+        )
 
 async def send_event_to_front(
     event_id: int,
@@ -1028,10 +1092,10 @@ async def handle_zigbee_command(
         if raw_payload is not None:
             event_payload["payload"] = raw_payload
 
-        _schedule_front_event(
-            1000,
-            event_payload,
-        )
+        # _schedule_front_event(
+        #     1000,
+        #     event_payload,
+        # )
 
         logger.info(
             f"Zigbee команда успешно выполнена: "
@@ -1301,7 +1365,7 @@ async def _read_scaled_input_register(
 
     if value is not None:
         return round(
-            value / scale,
+            (value - 16384) / scale,
             2,
         )
 
@@ -1392,6 +1456,8 @@ async def read_plc_sensors_data() -> dict:
         inputs["t3"]
     )
 
+    print(t1, t2, t3)
+
     t4 = await _read_scaled_input_register(
         inputs["t4"]
     )
@@ -1472,21 +1538,14 @@ async def read_plc_sensors_data() -> dict:
     exhaust_status = await _read_status_register(6)
 
     if event_value is not None:
+        
         # Если инициализация ещё не выполнена или значение изменилось
         if not _event_initialized or _previous_event_value != event_value:
             _event_initialized = True
             _previous_event_value = event_value
             
-            # Отправляем событие во фронт
-            _schedule_front_event(
-                event_value,  # event_id = значение регистра
-                {
-                    "source": "plc",
-                    "event_id": event_value,
-                    "timestamp": time.time(),
-                    "previous_value": _previous_event_value if _previous_event_value != event_value else None
-                }
-            )
+            print(event_value)
+            _schedule_plc_event(event_value)
             
             logger.info(f"Новое событие от ПЛК: event_id={event_value}")
     else:

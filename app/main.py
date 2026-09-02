@@ -57,13 +57,18 @@ async def on_startup() -> None:
     mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
     mqtt_topic = os.environ.get("MQTT_TOPIC", "zigbee2mqtt/0xf84477fffeab5e29")
 
-    from app.modbus_integration import set_event_callback, set_asyncio_loop
+    from app.modbus_integration import set_event_callback, set_asyncio_loop, set_plc_event_callback
     
     # Создаем функцию для отправки событий через WebSocket
-    async def zigbee_event_callback(event_id: int, payload: dict):
-        await manager.broadcast("zigbee_event", {"event_id": event_id, "payload": payload})
+    # async def zigbee_event_callback(event_id: int, payload: dict):
+        # await manager.broadcast("event", {"event_id": event_id, "payload": payload})
     set_asyncio_loop(asyncio.get_running_loop())
-    set_event_callback(zigbee_event_callback)
+    # set_event_callback(zigbee_event_callback)
+    async def event_callback(event_id: int):
+        await manager.broadcast("event", {"event_id": event_id})
+    
+    set_plc_event_callback(event_callback)
+    
     logger.info("Zigbee event callback установлен")
     
     if not init_zigbee_mqtt(mqtt_broker, mqtt_port, mqtt_topic):
