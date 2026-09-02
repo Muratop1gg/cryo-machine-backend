@@ -85,6 +85,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+
 async def sensors_broadcast_loop() -> None:
     """Раз в 0.2с забирает данные датчиков и рассылает их всем подключенным клиентам."""
     while True:
@@ -138,3 +139,26 @@ async def handle_incoming_message(raw: dict) -> None:
         logger.warning(f"Invalid payload for WS event {event!r}: {e}")
     except Exception as e:
         logger.exception(f"Ошибка обработки WS события {event}: {e}")
+
+async def handle_modbus_event(event_id: int, payload: dict) -> None:
+    """
+    Обработчик событий от Modbus.
+    Отправляет событие всем клиентам WebSocket.
+    """
+    try:
+        # Отправляем событие в формате {"event": "event", "payload": {"event_id": value}}
+        await manager.broadcast_event(event_id)
+        logger.info(f"Modbus событие отправлено в WS: event_id={event_id}, payload={payload}")
+    except Exception as e:
+        logger.exception(f"Ошибка отправки Modbus события в WS: {e}")
+
+def init_ws_event_handler() -> None:
+    """
+    Инициализировать обработчик событий от Modbus.
+    Должна вызываться при старте приложения.
+    """
+    from app import modbus_integration as modbus
+    
+    # Устанавливаем callback для отправки событий от Modbus
+    modbus.set_event_callback(handle_modbus_event)
+    logger.info("WS event handler для Modbus инициализирован")

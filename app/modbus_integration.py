@@ -72,6 +72,7 @@ MODBUS_CONFIG = {
         "humidity": 304,
         "oxygen": 305,
         "nitrogen_mass": 306,
+        "event": 307,  # НОВЫЙ РЕГИСТР СОБЫТИЙ
     },
 
     # Адреса дискретных входов (Discrete Inputs)
@@ -102,67 +103,8 @@ EventCallback = Callable[[int, dict], Awaitable[None]]
 
 _event_callback: Optional[EventCallback] = None
 _asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
-
-def set_asyncio_loop(
-    loop: asyncio.AbstractEventLoop,
-) -> None:
-    """
-    Сохранить основной asyncio event loop.
-
-    MQTT работает в отдельном потоке, поэтому
-    asyncio.get_running_loop() внутри MQTT callback
-    использовать нельзя.
-    """
-    global _asyncio_loop
-
-    _asyncio_loop = loop
-
-    logger.info(
-        "Основной asyncio event loop зарегистрирован"
-    )
-
-def _schedule_front_event(
-    event_id: int,
-    payload: dict,
-) -> None:
-    """
-    Безопасно отправить событие во фронт.
-
-    Может вызываться как из asyncio-потока,
-    так и из MQTT-потока.
-    """
-
-    global _asyncio_loop
-
-    if _asyncio_loop is None:
-        logger.warning(
-            "Не удалось отправить событие во фронт: "
-            "asyncio loop не зарегистрирован"
-        )
-        return
-
-    if _asyncio_loop.is_closed():
-        logger.warning(
-            "Не удалось отправить событие во фронт: "
-            "asyncio loop закрыт"
-        )
-        return
-
-    try:
-        asyncio.run_coroutine_threadsafe(
-            send_event_to_front(
-                event_id,
-                payload,
-            ),
-            _asyncio_loop,
-        )
-
-    except Exception as e:
-        logger.error(
-            f"Ошибка постановки события во фронт: {e}",
-            exc_info=True,
-        )
-_asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
+_previous_event_value: Optional[int] = None
+_event_initialized = False
 
 def set_asyncio_loop(
     loop: asyncio.AbstractEventLoop,
@@ -259,7 +201,6 @@ async def send_event_to_front(
             f"Ошибка при отправке события во фронт: {e}",
             exc_info=True,
         )
-
 
 # =====================================================================
 # КЛАСС MODBUS-КЛИЕНТА
@@ -1407,6 +1348,26 @@ async def _read_status_register(
 
     return 0
 
+def get_current_event_value() -> Optional[int]:
+    """
+    Получить текущее значение регистра событий.
+    """
+    return _previous_event_value
+
+async def _read_input_register_raw(
+    address: int,
+) -> Optional[int]:
+    """
+    Прочитать входной регистр без масштабирования (сырое значение).
+    """
+    manager = get_modbus_manager()
+    
+    value = await manager.read_input_register(address)
+    
+    if value is not None:
+        return value
+    
+    return None
 
 async def read_plc_sensors_data() -> dict:
     """
@@ -1414,6 +1375,7 @@ async def read_plc_sensors_data() -> dict:
     """
 
     inputs = MODBUS_CONFIG["input_registers"]
+    global _event_initialized, _previous_event_value
 
     # -------------------------------------------------------------
     # Input Registers
@@ -1445,6 +1407,8 @@ async def read_plc_sensors_data() -> dict:
     nitrogen_mass = await _read_scaled_input_register(
         inputs["nitrogen_mass"]
     )
+
+    event_value = await _read_input_register_raw(inputs["event"])
 
     # -------------------------------------------------------------
     # Discrete Inputs
@@ -1506,6 +1470,27 @@ async def read_plc_sensors_data() -> dict:
     charger_status = await _read_status_register(4)
     heater_status = await _read_status_register(5)
     exhaust_status = await _read_status_register(6)
+
+    if event_value is not None:
+        # Если инициализация ещё не выполнена или значение изменилось
+        if not _event_initialized or _previous_event_value != event_value:
+            _event_initialized = True
+            _previous_event_value = event_value
+            
+            # Отправляем событие во фронт
+            _schedule_front_event(
+                event_value,  # event_id = значение регистра
+                {
+                    "source": "plc",
+                    "event_id": event_value,
+                    "timestamp": time.time(),
+                    "previous_value": _previous_event_value if _previous_event_value != event_value else None
+                }
+            )
+            
+            logger.info(f"Новое событие от ПЛК: event_id={event_value}")
+    else:
+        logger.warning("Не удалось прочитать регистр событий")
 
     # -------------------------------------------------------------
     # Формируем структуру
