@@ -162,6 +162,67 @@ def _schedule_front_event(
             f"Ошибка постановки события во фронт: {e}",
             exc_info=True,
         )
+_asyncio_loop: Optional[asyncio.AbstractEventLoop] = None
+
+def set_asyncio_loop(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """
+    Сохранить основной asyncio event loop.
+
+    MQTT работает в отдельном потоке, поэтому
+    asyncio.get_running_loop() внутри MQTT callback
+    использовать нельзя.
+    """
+    global _asyncio_loop
+
+    _asyncio_loop = loop
+
+    logger.info(
+        "Основной asyncio event loop зарегистрирован"
+    )
+
+def _schedule_front_event(
+    event_id: int,
+    payload: dict,
+) -> None:
+    """
+    Безопасно отправить событие во фронт.
+
+    Может вызываться как из asyncio-потока,
+    так и из MQTT-потока.
+    """
+
+    global _asyncio_loop
+
+    if _asyncio_loop is None:
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop не зарегистрирован"
+        )
+        return
+
+    if _asyncio_loop.is_closed():
+        logger.warning(
+            "Не удалось отправить событие во фронт: "
+            "asyncio loop закрыт"
+        )
+        return
+
+    try:
+        asyncio.run_coroutine_threadsafe(
+            send_event_to_front(
+                event_id,
+                payload,
+            ),
+            _asyncio_loop,
+        )
+
+    except Exception as e:
+        logger.error(
+            f"Ошибка постановки события во фронт: {e}",
+            exc_info=True,
+        )
 
 def set_event_callback(callback: EventCallback) -> None:
     """
@@ -197,31 +258,6 @@ async def send_event_to_front(
         logger.error(
             f"Ошибка при отправке события во фронт: {e}",
             exc_info=True,
-        )
-
-
-def _schedule_front_event(
-    event_id: int,
-    payload: dict,
-) -> None:
-    """
-    Безопасно поставить отправку события во фронт
-    в текущий asyncio event loop.
-    """
-    try:
-        loop = asyncio.get_running_loop()
-
-        loop.create_task(
-            send_event_to_front(
-                event_id,
-                payload,
-            )
-        )
-
-    except RuntimeError:
-        logger.warning(
-            "Не удалось отправить событие во фронт: "
-            "нет активного asyncio event loop"
         )
 
 
@@ -1393,6 +1429,7 @@ async def read_plc_sensors_data() -> dict:
     t3 = await _read_scaled_input_register(
         inputs["t3"]
     )
+
     t4 = await _read_scaled_input_register(
         inputs["t4"]
     )
