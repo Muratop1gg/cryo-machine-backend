@@ -66,8 +66,8 @@ MODBUS_CONFIG = {
     # Адреса входных регистров (Input Registers)
     "input_registers": {
         "t1": 0,
-        "t2": 2,
-        "t3": 4,
+        "t2": 1,
+        "t3": 2,
         "t4": 303,
         "humidity": 304,
         "oxygen": 305,
@@ -256,7 +256,7 @@ class ModbusManager:
             port=port,
             auto_open=False,
             auto_close=False,
-            timeout=2,
+            timeout=1,
         )
 
         self._connected = False
@@ -971,7 +971,7 @@ async def handle_zigbee_command(
 
     zigbee_normal_map = {
         "on": ("procedure_start", True),
-        "off": ("procedure_stop", False),
+        "off": ("procedure_start", False),
     }
 
     event_payload = {
@@ -1382,7 +1382,6 @@ async def read_plc_sensors_data() -> dict:
     # -------------------------------------------------------------
     # Input Registers
     # -------------------------------------------------------------
-
     t1 = await _read_scaled_input_register(
         inputs["t1"]
     )
@@ -1394,7 +1393,6 @@ async def read_plc_sensors_data() -> dict:
     t3 = await _read_scaled_input_register(
         inputs["t3"]
     )
-    print(t1,t2,t3)
     t4 = await _read_scaled_input_register(
         inputs["t4"]
     )
