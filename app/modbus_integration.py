@@ -127,7 +127,7 @@ def set_asyncio_loop(
     )
 
 def _schedule_plc_event (
-    event_id: payload
+    event_id: int
 ) -> None:
     global _asyncio_loop
 
@@ -211,7 +211,7 @@ def set_event_callback(callback: EventCallback) -> None:
 
     logger.info("Event callback для фронта установлен")
 
-def set_plc_event_callback(callback: EventCallback) -> None:
+def set_plc_event_callback(callback: PLCEventCallback) -> None:
     """
     Установить callback для отправки событий во фронт.
     """
@@ -905,6 +905,14 @@ _trigger_states = {
     "pipe_hoist_down": False,
 }
 
+_TRIGGER_OPPOSITES = {
+    "hoist_up": "hoist_down",
+    "hoist_down": "hoist_up",
+
+    "pipe_hoist_up": "pipe_hoist_down",
+    "pipe_hoist_down": "pipe_hoist_up",
+}
+
 
 async def _execute_coil_command(
     command_name: str,
@@ -943,22 +951,78 @@ async def _toggle_trigger_command(
     """
     Выполнить команду как триггер.
 
-    Состояние переключается только после успешной
-    записи в ПЛК.
+    При включении одного направления автоматически
+    выключает противоположное направление.
+
+    Например:
+        pipe_hoist_up = True
+        -> pipe_hoist_down = False
+
+       и наоборот.
+
+    Состояние обновляется только после успешной записи
+    в ПЛК.
     """
     global _trigger_states
 
-    current_state = _trigger_states.get(
-        command_name,
-        False,
-    )
+    if command_name not in _trigger_states:
+        logger.error(
+            f"Неизвестный trigger command: {command_name}"
+        )
+        return False
 
+    current_state = _trigger_states[command_name]
     new_state = not current_state
 
     logger.info(
         f"Триггер {command_name}: "
         f"{current_state} -> {new_state}"
     )
+
+    # -------------------------------------------------------------
+    # Если мы ВКЛЮЧАЕМ направление —
+    # сначала выключаем противоположное.
+    # -------------------------------------------------------------
+
+    if new_state:
+        opposite_command = _TRIGGER_OPPOSITES.get(command_name)
+
+        if opposite_command:
+            opposite_state = _trigger_states.get(
+                opposite_command,
+                False,
+            )
+
+            if opposite_state:
+                logger.info(
+                    f"Выключаем противоположное направление: "
+                    f"{opposite_command} -> False"
+                )
+
+                opposite_success = await _execute_coil_command(
+                    opposite_command,
+                    False,
+                )
+
+                if not opposite_success:
+                    logger.error(
+                        f"Не удалось выключить противоположное "
+                        f"направление {opposite_command}. "
+                        f"Команда {command_name} не выполняется."
+                    )
+
+                    return False
+
+                _trigger_states[opposite_command] = False
+
+                logger.info(
+                    f"Противоположное направление "
+                    f"{opposite_command} успешно выключено"
+                )
+
+    # -------------------------------------------------------------
+    # Переключаем само направление
+    # -------------------------------------------------------------
 
     success = await _execute_coil_command(
         command_name,
