@@ -17,8 +17,13 @@ from app.models import (
     WSSensorsData,
     WSSteamSpeedControl,
 )
+from app import health
+
 
 logger = logging.getLogger("vent_backend.ws")
+
+async def _on_connection_status(name: str, status: str) -> None:
+    await manager.broadcast_connection_status(name, status)
 
 
 class ConnectionManager:
@@ -31,6 +36,18 @@ class ConnectionManager:
         async with self._lock:
             self._connections.add(ws)
         logger.info("WS client connected, total=%d", len(self._connections))
+
+        # Сразу отдаём новому клиенту текущий статус соединений
+        try:
+            await ws.send_json({
+                "event": "connection_status",
+                "payload": {
+                    "name": "snapshot",
+                    "status": health.get_status(),
+                },
+            })
+        except Exception:
+            logger.exception("failed to send initial connection_status")
 
     async def disconnect(self, ws: WebSocket) -> None:
         async with self._lock:
@@ -55,6 +72,12 @@ class ConnectionManager:
     async def broadcast_sensors_data(self, data: dict) -> None:
         validated = WSSensorsData.model_validate(data)
         await self.broadcast("sensors_data", validated.model_dump())
+
+    async def broadcast_connection_status(self, name: str, status: str) -> None:
+        await self.broadcast(
+            "connection_status",
+            {"name": name, "status": status},
+        )
 
     async def broadcast_zigbee_event(self, event_id: int, payload: dict):
         """Отправить событие от Zigbee всем клиентам."""
@@ -84,7 +107,10 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-
+def init_health_watchdog() -> None:
+        health.set_status_listener(_on_connection_status)
+        health.start_watchdog()
+        logger.info("Health watchdog инициализирован")
 
 async def sensors_broadcast_loop() -> None:
     """Раз в 0.2с забирает данные датчиков и рассылает их всем подключенным клиентам."""

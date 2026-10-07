@@ -58,6 +58,9 @@ async def on_startup() -> None:
     mqtt_topic = os.environ.get("MQTT_TOPIC", "zigbee2mqtt/0xf84477fffeab5e29")
 
     from app.modbus_integration import set_event_callback, set_asyncio_loop, set_plc_event_callback
+
+    from app.ws_manager import init_health_watchdog
+    init_health_watchdog()
     
     # Создаем функцию для отправки событий через WebSocket
     # async def zigbee_event_callback(event_id: int, payload: dict):
@@ -90,7 +93,8 @@ async def on_shutdown() -> None:
     
     # Остановка Zigbee
     stop_zigbee_mqtt()
-    
+    from app import health
+    await health.stop_watchdog()
     logger.info("Сервис остановлен")
 
 

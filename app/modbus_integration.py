@@ -20,6 +20,7 @@ import json
 import logging
 import time
 from typing import Optional, Callable, Awaitable, Any
+from app import health
 
 from pyModbusTCP.client import ModbusClient
 import paho.mqtt.client as mqtt
@@ -333,11 +334,13 @@ class ModbusManager:
                     f"Modbus подключен к "
                     f"{self.host}:{self.port}"
                 )
+                health.mark_modbus_ok
             else:
                 logger.error(
                     f"Не удалось подключиться к ПЛК по Modbus "
                     f"{self.host}:{self.port}"
                 )
+                health.mark_modbus_failed()
 
             return self._connected
 
@@ -348,7 +351,7 @@ class ModbusManager:
                 f"Ошибка подключения Modbus: {e}",
                 exc_info=True,
             )
-
+            health.mark_modbus_failed()
             return False
 
     async def connect(self) -> bool:
@@ -508,8 +511,9 @@ class ModbusManager:
             )
 
             if result and len(result) > 0:
+                health.mark_modbus_ok()
                 return result[0]
-
+            health.mark_modbus_failed()
             return None
 
         except Exception as e:
@@ -518,7 +522,7 @@ class ModbusManager:
                 f"{address}: {e}",
                 exc_info=True,
             )
-
+            health.mark_modbus_failed()
             return None
 
     def _read_discrete_input_sync(
@@ -1520,8 +1524,6 @@ async def read_plc_sensors_data() -> dict:
         inputs["t3"]
     )
 
-    print(t1, t2, t3)
-
     t4 = await _read_scaled_input_register(
         inputs["t4"]
     )
@@ -1601,6 +1603,15 @@ async def read_plc_sensors_data() -> dict:
     heater_status = await _read_status_register(5)
     exhaust_status = await _read_status_register(6)
 
+    if any(x is not None for x in (t1, t2, t3, t4, humidity, oxygen, nitrogen_mass,
+                                   pipe_top_emergency,pipe_top_working, pipe_bottom_working,
+                                   pipe_bottom_emergency, patient_top_emergency,patient_top_working,
+                                   patient_bottom_working,patient_bottom_emergency,patient_present,estop_pressed,
+                                   cabinet_door_open)):
+        health.mark_modbus_ok()
+    else:
+        health.mark_modbus_failed()
+
     if event_value is not None:
         
         # Если инициализация ещё не выполнена или значение изменилось
@@ -1612,8 +1623,12 @@ async def read_plc_sensors_data() -> dict:
             _schedule_plc_event(event_value)
             
             logger.info(f"Новое событие от ПЛК: event_id={event_value}")
+            health.mark_modbus_ok()
     else:
         logger.warning("Не удалось прочитать регистр событий")
+        health.mark_modbus_failed()
+
+    
 
     # -------------------------------------------------------------
     # Формируем структуру
@@ -1773,7 +1788,7 @@ def init_zigbee_mqtt(
                 f"Zigbee MQTT подключен к брокеру "
                 f"{broker}:{port}"
             )
-
+            health.mark_zigbee_ok()
             try:
                 client.subscribe(topic)
 
@@ -1789,11 +1804,13 @@ def init_zigbee_mqtt(
                     f"на {topic}: {e}",
                     exc_info=True,
                 )
+                health.mark_zigbee_failed()
+
 
         else:
 
             _zigbee_connected = False
-
+            health.mark_zigbee_failed()
             logger.error(
                 f"Zigbee MQTT ошибка подключения: "
                 f"{rc}"
@@ -1813,6 +1830,7 @@ def init_zigbee_mqtt(
             f"Zigbee MQTT отключен от брокера "
             f"(rc={rc})"
         )
+        health.mark_zigbee_failed()
 
     def on_message(
         client: mqtt.Client,
@@ -1828,7 +1846,8 @@ def init_zigbee_mqtt(
         Создаём asyncio task, чтобы MQTT callback
         не блокировался на Modbus TCP.
         """
-
+        
+        health.mark_zigbee_ok()
         try:
 
             payload_str = msg.payload.decode(
