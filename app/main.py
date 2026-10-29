@@ -21,7 +21,13 @@ from app.models import (
     StartSelfTestRequest,
     SystemConfiguration,
 )
-from app.ws_manager import handle_incoming_message, manager, sensors_broadcast_loop
+from app.buttons import buttons
+from app.ws_manager import (
+    broadcast_procedure_state,
+    handle_incoming_message,
+    manager,
+    sensors_broadcast_loop,
+)
 from app.modbus_integration import init_zigbee_mqtt, stop_zigbee_mqtt
 
 logging.basicConfig(level=logging.INFO)
@@ -80,6 +86,9 @@ async def on_startup() -> None:
     # Пробрасываем событие от контроллера в WS-рассылку
     hardware.set_event_callback(manager.broadcast_event)
 
+    # Автоотпускание "залипших" кнопок контроллера
+    buttons.start_watchdog()
+
     # Цикл рассылки sensors_data раз в 0.2с
     task = asyncio.create_task(sensors_broadcast_loop())
     _background_tasks.add(task)
@@ -93,6 +102,7 @@ async def on_shutdown() -> None:
     
     # Остановка Zigbee
     stop_zigbee_mqtt()
+    await buttons.stop_watchdog()
     from app import health
     await health.stop_watchdog()
     logger.info("Сервис остановлен")
@@ -102,12 +112,14 @@ async def on_shutdown() -> None:
 # POST /api/change-procedure-state/
 # ---------------------------------------------------------------------------
 
-@app.post("/api/change-procedure-state/", response_model=BasicResponse)
+@app.post("/api/change-procedure-state", response_model=BasicResponse)
+@app.post("/api/change-procedure-state/", response_model=BasicResponse, include_in_schema=False)
 async def change_procedure_state(body: ChangeProcedureStateRequest):
     ok = await hardware.send_procedure_action(body.action)
     if not ok:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Не удалось выполнить действие '{body.action}'")
+    await broadcast_procedure_state(body.action)
     return BasicResponse(status_code="200", message=f"Процедура: {body.action}")
 
 
@@ -115,7 +127,8 @@ async def change_procedure_state(body: ChangeProcedureStateRequest):
 # POST /api/self-test/, POST /api/self-test/stop
 # ---------------------------------------------------------------------------
 
-@app.post("/api/self-test/", response_model=BasicResponse)
+@app.post("/api/self-test", response_model=BasicResponse)
+@app.post("/api/self-test/", response_model=BasicResponse, include_in_schema=False)
 async def start_self_test(body: StartSelfTestRequest):
     ok = await hardware.start_self_test(body.type)
     if not ok:
@@ -221,7 +234,8 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_json()
-            await handle_incoming_message(raw)
+            if isinstance(raw, dict):
+                await handle_incoming_message(raw, ws)
     except WebSocketDisconnect:
         pass
     except Exception:
