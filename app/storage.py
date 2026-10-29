@@ -35,6 +35,7 @@ _lock = asyncio.Lock()
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "led_color": "#ffffff",
+    "led_active": False,
     "blocked": "no",
     "time_s1_sec": 0,
     "time_s2_sec": 0,

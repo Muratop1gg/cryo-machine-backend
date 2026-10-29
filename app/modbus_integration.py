@@ -54,6 +54,31 @@ MODBUS_CONFIG = {
         "buzzer": 810,
     },
 
+    # Кнопки, дублирующие кнопки контроллера (coil: 1 - нажата, 0 - отпущена).
+    # None - адрес ещё не задан, команда будет отклонена.
+    # TODO: заполнить адресами из программы ПЛК.
+    "buttons": {
+        "OK": None,
+        "ESC": None,
+        "RESET": None,
+        "CONFIRM": None,
+    },
+
+    # Ручное управление исполнительными устройствами из сервисного меню
+    # (coil: 1 - вкл, 0 - выкл). None - адрес ещё не задан.
+    # Лебёдки управляются через coils hoist_up/hoist_down и
+    # pipe_hoist_up/pipe_hoist_down выше.
+    # TODO: заполнить адресами из программы ПЛК.
+    "actuators": {
+        "blower": None,           # нагнетатель
+        "steam_generator": None,  # парогенератор
+        "steam_direction": None,  # парогенератор: 1 - реверс
+        "heater": None,           # ТЭН
+        "exhaust_fan": None,      # вентилятор вытяжки
+        "exhaust_damper": None,   # заслонка вытяжки: 1 - открыта
+        "led": None,              # подсветка
+    },
+
     # Адреса регистров хранения (Holding Registers)
     "registers": {
         "steam_speed": 100,
@@ -1220,6 +1245,51 @@ async def reset_trigger_states() -> None:
     )
 
 
+# Состояние лебёдок при ручном управлении из сервисного меню:
+# фронт присылает отдельно пуск (patient_hoist / pipe_hoist)
+# и направление (*_direction, True - вниз).
+_manual_hoists = {
+    "patient_hoist": {"running": False, "down": False, "up_cmd": "hoist_up", "down_cmd": "hoist_down"},
+    "pipe_hoist": {"running": False, "down": False, "up_cmd": "pipe_hoist_up", "down_cmd": "pipe_hoist_down"},
+}
+
+
+async def set_manual_hoist(
+    hoist: str,
+    running: Optional[bool] = None,
+    down: Optional[bool] = None,
+) -> bool:
+    """
+    Включить/выключить лебёдку или сменить направление.
+
+    Сначала выключается неактуальное направление, потом включается нужное,
+    чтобы на ПЛК никогда не были одновременно активны оба.
+    """
+    state = _manual_hoists[hoist]
+    if running is not None:
+        state["running"] = running
+    if down is not None:
+        state["down"] = down
+
+    up_value = state["running"] and not state["down"]
+    down_value = state["running"] and state["down"]
+
+    # сначала выключаем, потом включаем
+    order = sorted(
+        ((state["up_cmd"], up_value), (state["down_cmd"], down_value)),
+        key=lambda item: item[1],
+    )
+
+    success = True
+    for command, value in order:
+        ok = await _execute_coil_command(command, value)
+        if ok:
+            _trigger_states[command] = value
+        success &= ok
+
+    return success
+
+
 def get_trigger_state(
     command_name: str,
 ) -> bool:
@@ -1463,7 +1533,7 @@ async def _read_status_register(
     offset: int,
 ) -> int:
     """
-    Прочитать статусный регистр (0-3).
+    Прочитать статусный регистр (0-4).
 
     Базовый адрес: 200.
     """
@@ -1475,7 +1545,7 @@ async def _read_status_register(
         base_address + offset
     )
 
-    if value is not None and 0 <= value <= 3:
+    if value is not None and 0 <= value <= 4:
         return value
 
     return 0
