@@ -1084,125 +1084,14 @@ async def handle_zigbee_command(
     """
     Обработать команду от Zigbee-пульта.
 
-    Args:
-        action:
-            Действие с пульта.
-
-        raw_payload:
-            Оригинальный payload для отправки во фронт.
-
-    Returns:
-        True если команда выполнена успешно.
+    Разбор пакетов и действия кнопок - в app/zigbee_remote.py
+    (по спецификации пульта Zigbee2MQTT, 11 кнопок).
     """
+    from app import zigbee_remote
 
-    zigbee_trigger_map = {
-        "brightness_step_up": "hoist_up",
-        "brightness_step_down": "hoist_down",
-
-        "color_temperature_step_down": "pipe_hoist_up",
-        "color_temperature_step_up": "pipe_hoist_down",
-    }
-
-    zigbee_normal_map = {
-        "on": ("procedure_start", True),
-        "off": ("procedure_start", False),
-    }
-
-    event_payload = {
-        "source": "zigbee",
-        "action": action,
-        "timestamp": time.time(),
-    }
-
-    logger.info(
-        f"Zigbee команда: {action}"
-    )
-
-    # -------------------------------------------------------------
-    # Обычная команда
-    # -------------------------------------------------------------
-
-    if action in zigbee_normal_map:
-
-        command, value = zigbee_normal_map[action]
-
-        logger.info(
-            f"Zigbee -> Modbus: "
-            f"{action} -> {command} = {value}"
-        )
-
-        success = await _execute_coil_command(
-            command,
-            value,
-        )
-
-        event_payload["command"] = command
-        event_payload["value"] = value
-
-    # -------------------------------------------------------------
-    # Триггер
-    # -------------------------------------------------------------
-
-    elif action in zigbee_trigger_map:
-
-        command = zigbee_trigger_map[action]
-
-        logger.info(
-            f"Zigbee триггер -> Modbus: "
-            f"{action} -> {command}"
-        )
-
-        success = await _toggle_trigger_command(
-            command
-        )
-
-        event_payload["command"] = command
-        event_payload["new_state"] = (
-            _trigger_states.get(
-                command,
-                False,
-            )
-        )
-
-    # -------------------------------------------------------------
-    # Неизвестная команда
-    # -------------------------------------------------------------
-
-    else:
-
-        logger.warning(
-            f"Неизвестное Zigbee действие: {action}"
-        )
-
-        return False
-
-    # -------------------------------------------------------------
-    # Отправляем событие во фронт
-    # -------------------------------------------------------------
-
-    if success:
-
-        if raw_payload is not None:
-            event_payload["payload"] = raw_payload
-
-        # _schedule_front_event(
-        #     1000,
-        #     event_payload,
-        # )
-
-        logger.info(
-            f"Zigbee команда успешно выполнена: "
-            f"{event_payload}"
-        )
-
-    else:
-
-        logger.error(
-            f"Zigbee команда НЕ выполнена: "
-            f"{event_payload}"
-        )
-
-    return success
+    payload = dict(raw_payload or {})
+    payload.setdefault("action", action)
+    return await zigbee_remote.handle_remote_payload(payload)
 
 
 async def reset_trigger_states() -> None:
@@ -2045,7 +1934,9 @@ def init_zigbee_mqtt(
         _zigbee_client.on_disconnect = on_disconnect
         _zigbee_client.on_message = on_message
 
-        _zigbee_client.connect(
+        # connect_async + loop_start: если брокер недоступен при старте,
+        # paho сам переподключится, когда он появится
+        _zigbee_client.connect_async(
             broker,
             port,
             keepalive=60,

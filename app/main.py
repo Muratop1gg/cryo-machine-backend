@@ -10,7 +10,7 @@ import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import hardware, storage
+from app import hardware, storage, zigbee_remote
 from app.models import (
     BasicResponse,
     ChangeProcedureStateRequest,
@@ -89,6 +89,9 @@ async def on_startup() -> None:
     # Автоотпускание "залипших" кнопок контроллера
     buttons.start_watchdog()
 
+    # Остановка лебёдки пациента, если пульт перестал слать пакеты удержания
+    zigbee_remote.patient_hoist.start_watchdog()
+
     # Цикл рассылки sensors_data раз в 0.2с
     task = asyncio.create_task(sensors_broadcast_loop())
     _background_tasks.add(task)
@@ -103,6 +106,7 @@ async def on_shutdown() -> None:
     # Остановка Zigbee
     stop_zigbee_mqtt()
     await buttons.stop_watchdog()
+    await zigbee_remote.patient_hoist.stop_watchdog()
     from app import health
     await health.stop_watchdog()
     logger.info("Сервис остановлен")
