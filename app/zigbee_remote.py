@@ -141,9 +141,26 @@ async def _toggle_procedure() -> bool:
     return ok
 
 
-async def _not_implemented(button: str) -> bool:
-    logger.warning("Пульт: действие для кнопки %s ещё не задано", button)
-    return False
+TIME_STEP_SEC = 10
+
+
+async def _change_procedure_time(delta: int) -> bool:
+    """t_up / t_dw: длительность процедуры (time_s3_sec) +-10 с"""
+    from app import hardware, storage
+
+    settings = await storage.read_settings()
+    new_value = max(0, min(65535, int(settings.get("time_s3_sec", 0)) + delta))
+    if not await hardware.apply_settings({"time_s3_sec": new_value}):
+        return False
+    settings["time_s3_sec"] = new_value
+    await storage.write_settings(settings)
+    logger.info("Пульт: длительность процедуры %s с", new_value)
+    return True
+
+
+async def _ignore() -> bool:
+    # connect (S3) - кнопка сопряжения пульта с установкой, обрабатывается самим Zigbee
+    return True
 
 
 ACTIONS: dict[str, Callable[[], Awaitable[bool]]] = {
@@ -156,10 +173,9 @@ ACTIONS: dict[str, Callable[[], Awaitable[bool]]] = {
     # TODO: подтвердить: precool/dry - запуск прохолаживания/сушки
     "precool": lambda: mi._execute_coil_command("cooling_start", True),
     "dry": lambda: mi._execute_coil_command("dry_start", True),
-    # TODO: действия не определены
-    "connect": lambda: _not_implemented("connect"),
-    "t_up": lambda: _not_implemented("t_up"),
-    "t_dw": lambda: _not_implemented("t_dw"),
+    "t_up": lambda: _change_procedure_time(TIME_STEP_SEC),
+    "t_dw": lambda: _change_procedure_time(-TIME_STEP_SEC),
+    "connect": _ignore,
 }
 
 
