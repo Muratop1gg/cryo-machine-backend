@@ -7,6 +7,7 @@ import logging
 from typing import Optional, Callable, Awaitable
 
 from app import modbus_integration
+from app.buttons import buttons
 
 logger = logging.getLogger("vent_backend.hardware")
 
@@ -127,17 +128,23 @@ async def apply_settings(settings: dict) -> bool:
     config = modbus_integration.MODBUS_CONFIG["registers"]
     success = True
     
+    # write_register - корутина, без await запись не выполнялась
     if "temperature_sp1" in settings:
-        success &= manager.write_register(config["temperature_sp1"], int(settings["temperature_sp1"] * 10))
+        success &= await manager.write_register(config["temperature_sp1"], int(settings["temperature_sp1"] * 10))
     if "temperature_sp2" in settings:
-        success &= manager.write_register(config["temperature_sp2"], int(settings["temperature_sp2"] * 10))
+        success &= await manager.write_register(config["temperature_sp2"], int(settings["temperature_sp2"] * 10))
     if "time_s1_sec" in settings:
-        success &= manager.write_register(config["time_s1"], int(settings["time_s1_sec"]))
+        success &= await manager.write_register(config["time_s1"], int(settings["time_s1_sec"]))
     if "time_s2_sec" in settings:
-        success &= manager.write_register(config["time_s2"], int(settings["time_s2_sec"]))
+        success &= await manager.write_register(config["time_s2"], int(settings["time_s2_sec"]))
     if "time_s3_sec" in settings:
-        success &= manager.write_register(config["time_s3"], int(settings["time_s3_sec"]))
-    
+        success &= await manager.write_register(config["time_s3"], int(settings["time_s3_sec"]))
+
+    # Подсветка вкл/выкл (если адрес задан)
+    led_address = modbus_integration.MODBUS_CONFIG["actuators"].get("led")
+    if "led_active" in settings and led_address is not None:
+        success &= await manager.write_coil(led_address, bool(settings["led_active"]))
+
     # Применение цвета LED (если есть)
     if "led_color" in settings:
         # TODO: добавить Modbus команду для LED
@@ -160,33 +167,51 @@ async def check_unlock_code(code: str) -> tuple[bool, int]:
     return False, 0
 
 
-async def send_button_press(button: str) -> None:
-    """Нажатие кнопки на пульте."""
+async def send_button_press(client_id: int, button: str) -> None:
+    """Нажатие кнопки, дублирующей кнопку контроллера."""
     logger.info(f"send_button_press({button})")
-    # TODO: Modbus команда для кнопки
+    await buttons.press(client_id, button)
 
 
-async def send_button_release() -> None:
-    """Отпускание кнопки."""
-    logger.info("send_button_release()")
-    # TODO: Modbus команда для отпускания
+async def send_button_release(client_id: int, button: Optional[str] = None) -> None:
+    """Отпускание кнопки (без button - все кнопки этого клиента)."""
+    logger.info(f"send_button_release({button})")
+    await buttons.release(client_id, button)
 
 
-async def send_machine_control(control_type: str, value: bool) -> None:
+async def send_machine_control(control_type: str, value: bool) -> bool:
     """Управление узлом машины."""
     logger.info(f"send_machine_control({control_type}, {value})")
-    await modbus_integration.handle_web_socket_command(
-        "machine_controls", 
+
+    # Лебёдки из сервисного меню: пуск и направление приходят отдельно
+    if control_type in ("patient_hoist", "pipe_hoist"):
+        return await modbus_integration.set_manual_hoist(control_type, running=value)
+    if control_type in ("patient_hoist_direction", "pipe_hoist_direction"):
+        return await modbus_integration.set_manual_hoist(
+            control_type.removesuffix("_direction"), down=value
+        )
+
+    actuators = modbus_integration.MODBUS_CONFIG["actuators"]
+    if control_type in actuators:
+        address = actuators[control_type]
+        if address is None:
+            logger.warning(f"Не задан адрес coil для {control_type}")
+            return False
+        manager = modbus_integration.get_modbus_manager()
+        return await manager.write_coil(address, value)
+
+    return await modbus_integration.handle_web_socket_command(
+        "machine_controls",
         {"control_type": control_type, "value": value}
     )
 
 
-async def send_steam_speed(value: int) -> None:
+async def send_steam_speed(value: int) -> bool:
     """Установить скорость пара."""
     logger.info(f"send_steam_speed({value})")
     manager = modbus_integration.get_modbus_manager()
     address = modbus_integration.MODBUS_CONFIG["registers"]["steam_speed"]
-    manager.write_register(address, value)
+    return await manager.write_register(address, value)
 
 
 # =====================================================================

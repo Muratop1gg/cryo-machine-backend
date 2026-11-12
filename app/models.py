@@ -135,10 +135,10 @@ class DigitalInputs(BaseModel):
 class Stats(BaseModel):
     patient_hoist: Literal[0, 1, 2, 3]
     pipe_hoist: Literal[0, 1, 2, 3]
-    steam: Literal[0, 1, 2, 3]
+    steam: Literal[0, 1, 2, 3, 4]    # 4 - авария
     charger: Literal[0, 1, 2, 3]
     heater: Literal[0, 1, 2, 3]
-    exhaust: Literal[0, 1, 2, 3]
+    exhaust: Literal[0, 1, 2, 3, 4]  # 4 - авария
 
 
 class SensorData(BaseModel):
@@ -184,7 +184,8 @@ class WSControllerButtonPressed(BaseModel):
 
 
 class WSControllerButtonReleased(BaseModel):
-    """У этого события нет данных (`no data` в README)."""
+    """Без button отпускаются все кнопки, зажатые этим клиентом."""
+    button: Optional[ControllerButton] = None
 
 
 class WSMachineControl(BaseModel):
@@ -196,6 +197,12 @@ class WSMachineControl(BaseModel):
     value: bool
 
     model_config = {"populate_by_name": True}
+
+
+class WSProcedureState(BaseModel):
+    """Состояние процедуры для таймера на фронте (сервер -> клиент)."""
+    action: Optional[ProcedureAction] = None  # None - снимок при подключении
+    status: Literal["stopped", "running", "paused"]
 
 
 class WSSteamSpeedControl(BaseModel):
