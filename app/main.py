@@ -6,6 +6,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# .env читаем до импорта модулей, которые используют переменные окружения
+# (storage читает VENT_DATA_DIR на импорте).
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -103,6 +112,7 @@ async def on_shutdown() -> None:
 # ---------------------------------------------------------------------------
 
 @app.post("/api/change-procedure-state/", response_model=BasicResponse)
+@app.post("/api/change-procedure-state", response_model=BasicResponse, include_in_schema=False)
 async def change_procedure_state(body: ChangeProcedureStateRequest):
     ok = await hardware.send_procedure_action(body.action)
     if not ok:
@@ -116,6 +126,7 @@ async def change_procedure_state(body: ChangeProcedureStateRequest):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/self-test/", response_model=BasicResponse)
+@app.post("/api/self-test", response_model=BasicResponse, include_in_schema=False)
 async def start_self_test(body: StartSelfTestRequest):
     ok = await hardware.start_self_test(body.type)
     if not ok:
@@ -150,12 +161,23 @@ async def update_settings(body: SettingsUpdateRequest):
 
     current.update(update_data)
 
-    ok = await hardware.apply_settings(current)
-    if not ok:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="Не удалось применить настройки на контроллере")
+    applied = False
+    try:
+        applied = await hardware.apply_settings(current)
+    except Exception:
+        logger.exception("Не удалось применить настройки на контроллере")
 
+    # Настройки сохраняем в любом случае, чтобы они не потерялись,
+    # даже если ПЛК сейчас недоступен.
     await storage.write_settings(current)
+
+    if not applied:
+        logger.warning("Настройки сохранены локально, но не применены на ПЛК")
+        return BasicResponse(
+            status_code="200",
+            message="Настройки сохранены локально, но не применены на контроллере",
+        )
+
     return BasicResponse(status_code="200", message="Настройки обновлены")
 
 

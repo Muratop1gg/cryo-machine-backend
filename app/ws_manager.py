@@ -151,7 +151,8 @@ async def handle_incoming_message(raw: dict) -> None:
         # Новые команды для сушки/процедуры/прохлаживания
         elif event in ["dry_start", "dry_stop", "procedure_start", "procedure_stop",
                        "cooling_start", "cooling_stop", "hoist_up", "hoist_down",
-                       "pipe_hoist_up", "pipe_hoist_down"]:
+                       "pipe_hoist_up", "pipe_hoist_down",
+                       "hoist_button_pressed", "hoist_button_released"]:
             success = await hardware.handle_ws_command(event, payload)
             if success:
                 logger.info(f"Команда {event} выполнена успешно")

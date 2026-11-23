@@ -3,12 +3,17 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional, Callable, Awaitable
 
 from app import modbus_integration
 
 logger = logging.getLogger("vent_backend.hardware")
+
+# ПЛК работает в целых инженерных единицах (°C), поэтому уставка
+# пишется как есть. Если в проекте ПЛК появятся десятые доли — 10.
+TEMPERATURE_SETPOINT_SCALE = 1
 
 
 # =====================================================================
@@ -128,15 +133,21 @@ async def apply_settings(settings: dict) -> bool:
     success = True
     
     if "temperature_sp1" in settings:
-        success &= manager.write_register(config["temperature_sp1"], int(settings["temperature_sp1"] * 10))
+        success &= await manager.write_register(
+            config["temperature_sp1"],
+            int(round(settings["temperature_sp1"] * TEMPERATURE_SETPOINT_SCALE)),
+        )
     if "temperature_sp2" in settings:
-        success &= manager.write_register(config["temperature_sp2"], int(settings["temperature_sp2"] * 10))
+        success &= await manager.write_register(
+            config["temperature_sp2"],
+            int(round(settings["temperature_sp2"] * TEMPERATURE_SETPOINT_SCALE)),
+        )
     if "time_s1_sec" in settings:
-        success &= manager.write_register(config["time_s1"], int(settings["time_s1_sec"]))
+        success &= await manager.write_register(config["time_s1"], int(settings["time_s1_sec"]))
     if "time_s2_sec" in settings:
-        success &= manager.write_register(config["time_s2"], int(settings["time_s2_sec"]))
+        success &= await manager.write_register(config["time_s2"], int(settings["time_s2_sec"]))
     if "time_s3_sec" in settings:
-        success &= manager.write_register(config["time_s3"], int(settings["time_s3_sec"]))
+        success &= await manager.write_register(config["time_s3"], int(settings["time_s3_sec"]))
     
     # Применение цвета LED (если есть)
     if "led_color" in settings:
@@ -161,15 +172,25 @@ async def check_unlock_code(code: str) -> tuple[bool, int]:
 
 
 async def send_button_press(button: str) -> None:
-    """Нажатие кнопки на пульте."""
+    """Нажатие кнопки на пульте: импульс в соответствующую катушку."""
     logger.info(f"send_button_press({button})")
-    # TODO: Modbus команда для кнопки
+
+    address = modbus_integration.MODBUS_CONFIG["buttons"].get(button)
+
+    if address is None:
+        logger.warning(f"Неизвестная кнопка пульта: {button}")
+        return
+
+    manager = modbus_integration.get_modbus_manager()
+
+    if await manager.write_coil(address, True):
+        await asyncio.sleep(0.2)
+        await manager.write_coil(address, False)
 
 
 async def send_button_release() -> None:
-    """Отпускание кнопки."""
-    logger.info("send_button_release()")
-    # TODO: Modbus команда для отпускания
+    """Отпускание кнопки (импульс уже снят в send_button_press)."""
+    logger.debug("send_button_release()")
 
 
 async def send_machine_control(control_type: str, value: bool) -> None:
@@ -186,7 +207,7 @@ async def send_steam_speed(value: int) -> None:
     logger.info(f"send_steam_speed({value})")
     manager = modbus_integration.get_modbus_manager()
     address = modbus_integration.MODBUS_CONFIG["registers"]["steam_speed"]
-    manager.write_register(address, value)
+    await manager.write_register(address, int(value))
 
 
 # =====================================================================

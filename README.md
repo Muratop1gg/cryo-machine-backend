@@ -25,4 +25,6 @@ VENT_DATA_DIR=./data
 
 ```
 
-5. uvicorn app.main:app —host 0.0.0.0 —port 8080
+5. uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+Фронтенд обращается к бэкенду на порт 8080 (`VITE_API_URL`, `VITE_WS_URL`).

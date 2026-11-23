@@ -54,6 +54,25 @@ MODBUS_CONFIG = {
         "buzzer": 810,
     },
 
+    # Кнопки пульта (Coils)
+    "buttons": {
+        "OK": 8,
+        "RESET": 9,
+        "CONFIRM": 11,
+        "ESC": 13,
+    },
+
+    # Исполнительные механизмы (Coils)
+    "actuators": {
+        "blower": 20,
+        "steam_generator": 21,
+        "steam_direction": 22,
+        "heater": 23,
+        "exhaust_fan": 24,
+        "exhaust_damper": 25,
+        "led": 26,
+    },
+
     # Адреса регистров хранения (Holding Registers)
     "registers": {
         "steam_speed": 100,
@@ -949,6 +968,143 @@ async def _execute_coil_command(
     )
 
 
+# =====================================================================
+# ИМПУЛЬСНЫЕ КОМАНДЫ (КНОПКИ)
+# =====================================================================
+
+# В ПЛК эти катушки работают как кнопки: важен фронт, а не уровень.
+# Поэтому пишем True, выдерживаем паузу и возвращаем False.
+_PULSE_COMMANDS = {
+    "dry_start",
+    "dry_stop",
+    "procedure_start",
+    "procedure_stop",
+    "cooling_start",
+    "cooling_stop",
+}
+
+_PULSE_DURATION_SEC = 0.3
+
+
+async def _pulse_coil_command(
+    command_name: str,
+    pulse_sec: float = _PULSE_DURATION_SEC,
+) -> bool:
+    """
+    Подать импульс на катушку: True -> пауза -> False.
+    """
+    if not await _execute_coil_command(command_name, True):
+        return False
+
+    await asyncio.sleep(pulse_sec)
+
+    return await _execute_coil_command(command_name, False)
+
+
+# =====================================================================
+# ЛЕБЁДКИ (HOLD-TO-RUN)
+# =====================================================================
+
+# Противоположное направление: включаем одно — гасим другое.
+_HOIST_OPPOSITES = {
+    "hoist_up": "hoist_down",
+    "hoist_down": "hoist_up",
+    "pipe_hoist_up": "pipe_hoist_down",
+    "pipe_hoist_down": "pipe_hoist_up",
+}
+
+_HOIST_COMMANDS = tuple(_HOIST_OPPOSITES)
+
+# Страховка: если фронт не пришлёт hoist_button_released,
+# через это время лебёдка остановится сама.
+HOIST_HOLD_TIMEOUT_SEC = 5.0
+
+_hoist_release_tasks: set[asyncio.Task] = set()
+
+
+async def _execute_hoist_command(
+    command_name: str,
+    value: bool = True,
+) -> bool:
+    """
+    Включить/выключить направление лебёдки, погасив противоположное.
+    """
+    opposite = _HOIST_OPPOSITES.get(command_name)
+
+    if opposite is None:
+        return await _execute_coil_command(command_name, value)
+
+    if value:
+        await _execute_coil_command(opposite, False)
+
+    return await _execute_coil_command(command_name, bool(value))
+
+
+async def release_hoists() -> None:
+    """Снять все команды движения лебёдок."""
+    for command_name in _HOIST_COMMANDS:
+        await _execute_coil_command(command_name, False)
+
+
+async def _hoist_auto_release(delay: float) -> None:
+    try:
+        await asyncio.sleep(delay)
+        await release_hoists()
+    except asyncio.CancelledError:
+        pass
+
+
+def _schedule_hoist_release(
+    delay: float = HOIST_HOLD_TIMEOUT_SEC,
+) -> None:
+    task = asyncio.create_task(_hoist_auto_release(delay))
+    _hoist_release_tasks.add(task)
+    task.add_done_callback(_hoist_release_tasks.discard)
+
+
+# Кнопки лебёдок с фронта -> команды катушек
+HOIST_BUTTON_COMMANDS = {
+    "patient_hoist_up": "hoist_up",
+    "patient_hoist_down": "hoist_down",
+    "pipe_hoist_up": "pipe_hoist_up",
+    "pipe_hoist_down": "pipe_hoist_down",
+}
+
+
+async def handle_hoist_button(button: str) -> bool:
+    """
+    Нажатие кнопки лебёдки (режим удержания).
+    """
+    command_name = HOIST_BUTTON_COMMANDS.get(button)
+
+    if command_name is None:
+        logger.warning(f"Неизвестная кнопка лебёдки: {button}")
+        return False
+
+    success = await _execute_hoist_command(command_name, True)
+
+    if success:
+        _schedule_hoist_release()
+
+    return success
+
+
+async def _execute_command(
+    command_name: str,
+    value: bool,
+) -> bool:
+    """
+    Выполнить команду: импульсные — импульсом, остальные — уровнем.
+    """
+    if command_name in _PULSE_COMMANDS:
+        return await _pulse_coil_command(command_name)
+
+    if command_name in _HOIST_OPPOSITES:
+        return await _execute_hoist_command(command_name, value)
+
+    return await _execute_coil_command(command_name, value)
+
+
 async def _toggle_trigger_command(
     command_name: str,
 ) -> bool:
@@ -1080,7 +1236,7 @@ async def handle_zigbee_command(
 
     zigbee_normal_map = {
         "on": ("procedure_start", True),
-        "off": ("procedure_start", False),
+        "off": ("procedure_stop", True),
     }
 
     event_payload = {
@@ -1106,7 +1262,7 @@ async def handle_zigbee_command(
             f"{action} -> {command} = {value}"
         )
 
-        success = await _execute_coil_command(
+        success = await _execute_command(
             command,
             value,
         )
@@ -1245,6 +1401,26 @@ async def handle_web_socket_command(
     """
 
     # -------------------------------------------------------------
+    # hoist_button_pressed / hoist_button_released
+    # -------------------------------------------------------------
+
+    if event == "hoist_button_pressed":
+
+        button = payload.get("button")
+
+        logger.info(f"WS лебёдка: нажата {button}")
+
+        return await handle_hoist_button(str(button))
+
+    if event == "hoist_button_released":
+
+        logger.info("WS лебёдка: отпущена")
+
+        await release_hoists()
+
+        return True
+
+    # -------------------------------------------------------------
     # machine_controls
     # -------------------------------------------------------------
 
@@ -1311,7 +1487,7 @@ async def handle_web_socket_command(
             f"value={value})"
         )
 
-        success = await _execute_coil_command(
+        success = await _execute_command(
             command,
             value,
         )
@@ -1340,7 +1516,7 @@ async def handle_web_socket_command(
 
     command_map = {
         "dry_start": ("dry_start", True),
-        "dry_stop": ("dry_stop", False),
+        "dry_stop": ("dry_stop", True),
 
         "procedure_start": (
             "procedure_start",
@@ -1349,7 +1525,7 @@ async def handle_web_socket_command(
 
         "procedure_stop": (
             "procedure_stop",
-            False,
+            True,
         ),
 
         "cooling_start": (
@@ -1359,11 +1535,11 @@ async def handle_web_socket_command(
 
         "cooling_stop": (
             "cooling_stop",
-            False,
+            True,
         ),
 
         "hoist_up": ("hoist_up", True),
-        "hoist_down": ("hoist_down", False),
+        "hoist_down": ("hoist_down", True),
 
         "pipe_hoist_up": (
             "pipe_hoist_up",
@@ -1372,7 +1548,7 @@ async def handle_web_socket_command(
 
         "pipe_hoist_down": (
             "pipe_hoist_down",
-            False,
+            True,
         ),
     }
 
@@ -1385,7 +1561,7 @@ async def handle_web_socket_command(
             f"{command} = {value}"
         )
 
-        success = await _execute_coil_command(
+        success = await _execute_command(
             command,
             value,
         )
@@ -1418,12 +1594,20 @@ async def handle_web_socket_command(
 # ЧТЕНИЕ ДАННЫХ С ПЛК
 # =====================================================================
 
+# Проект ПЛК отдаёт в Input Registers уже инженерные значения
+# (real -> int), поэтому смещение и делитель не нужны.
+# Если в ПЛК появятся сырые значения АЦП, вернуть OFFSET=16384, SCALE=10.
+SENSOR_RAW_OFFSET = 0
+SENSOR_RAW_SCALE = 1.0
+
+
 async def _read_scaled_input_register(
     address: int,
-    scale: float = 10.0,
+    scale: float = SENSOR_RAW_SCALE,
+    offset: float = SENSOR_RAW_OFFSET,
 ) -> Optional[float]:
     """
-    Прочитать входной регистр и масштабировать значение.
+    Прочитать входной регистр и привести к инженерным единицам.
     """
     manager = get_modbus_manager()
 
@@ -1433,7 +1617,7 @@ async def _read_scaled_input_register(
 
     if value is not None:
         return round(
-            (value - 16384) / scale,
+            (value - offset) / scale,
             2,
         )
 
